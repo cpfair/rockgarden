@@ -336,15 +336,13 @@ def update_manifest(app_dir):
             binfile=f.read()
             return stm32_crc.crc32(binfile)&0xFFFFFFFF
 
-    manifest_file = open(os.path.join(app_dir, "manifest.json"), "r+")
-    manifest_obj = json.load(manifest_file)
-    manifest_file.seek(0)
+    manifest_file_content = open(os.path.join(app_dir, "manifest.json"), "r+").read()
+    manifest_obj = json.loads(manifest_file_content)
 
     bin_crc = stm32crc(os.path.join(app_dir, "pebble-app.bin"))
     manifest_obj["application"]["crc"] = bin_crc
     manifest_obj["application"]["size"] = os.stat(os.path.join(app_dir, "pebble-app.bin")).st_size
-    json.dump(manifest_obj, manifest_file)
-    manifest_file.close()
+    open(os.path.join(app_dir, "manifest.json"), "w").write(json.dumps(manifest_obj))
 
 def patch_and_repack_pbw(pbw_path, pbw_out_path):
     pbw_tmp_dir = os.path.join(scratch_dir, "pbw")
