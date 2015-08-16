@@ -22,12 +22,13 @@ if not os.path.exists(scratch_dir):
 
 
 class Platform:
-    def __init__(self, name, arch, includes, lib):
+    def __init__(self, name, arch, includes, lib, cflags=None):
         self.name = name
         self.arch = arch
         self.includes = includes
         self.lib = lib
         self.syscall_table = None
+        self.cflags = cflags
         self._patch()
         self._load_syscall_table()
 
@@ -67,7 +68,7 @@ class Platform:
 
 platforms = {
     "aplite": Platform("aplite", "cortex-m3", ["sdk/aplite/include"], "sdk/aplite/lib/libpebble.a"),
-    "basalt": Platform("basalt", "cortex-m4", ["sdk/basalt/include"], "sdk/basalt/lib/libpebble.a")
+    "basalt": Platform("basalt", "cortex-m4", ["sdk/basalt/include"], "sdk/basalt/lib/libpebble.a", ["-D_TIME_H_"])
 }
 
 def compile(infiles, outfile, platform, cflags=None, linkflags=None):
@@ -78,7 +79,7 @@ def compile(infiles, outfile, platform, cflags=None, linkflags=None):
     linkflags = linkflags if linkflags else []
 
     if "-c" not in cflags: # To avoid the harmless warning
-        infiles.append(platform.lib)
+        infiles = infiles + [platform.lib]
     # Common flags
     cflags = [  "-mcpu=%s" % platform.arch,
                 "-mthumb",
@@ -88,6 +89,8 @@ def compile(infiles, outfile, platform, cflags=None, linkflags=None):
                 "-fdata-sections",
                 "-std=c99",
                 "-nostdlib"] + ["-I%s" % path for path in platform.includes] + cflags
+    if platform.cflags:
+        cflags = cflags + platform.cflags
 
     linkflags = ["-e_entry",
                  "--gc-sections"] + linkflags
@@ -280,7 +283,6 @@ def patch_bin(bin_file, platform):
     mod_syscall_proxy_addr = get_symbol_addr(mod_binary_nm_output, "jump_to_pbl_function__proxy")
     mod_syscall_proxy_jmp_addr = mod_syscall_proxy_addr + 1 # +1 to indicate THUMB 16-bit instruction
     replacement_fcn = unhexify("03 A3 18 68 00 4A 10 47") + struct.pack("<L", mod_syscall_proxy_jmp_addr) + unhexify("00 BF 00 BF A8 A8 A8 A8")
-    # replacement_fcn = chr(0x03) + jump_to_pbl_function_signature[1:]
     assert len(replacement_fcn) == len(jump_to_pbl_function_signature)
     main_binary = main_binary.replace(jump_to_pbl_function_signature, replacement_fcn)
     print("our proxy addr", hex(mod_syscall_proxy_addr))
@@ -356,12 +358,14 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path):
     # Update CRC of binary
     update_manifest(pbw_tmp_dir)
 
-    shutil.rmtree(os.path.join(pbw_tmp_dir, "basalt"))
-    # if os.path.exists("pbw_tmp/basalt"):
-    #     # Do the same for basalt
-    #     patch_bin(open("pbw_tmp/basalt/pebble-app.bin", "r+b"))
-    #     # Update CRC of binary
-    #     update_manifest("pbw_tmp/basalt")
+    # shutil.rmtree(os.path.join(pbw_tmp_dir, "basalt"))
+
+    if os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
+        # Do the same for basalt
+        patch_bin(open(os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), "r+b"), platforms["basalt"])
+        # Update CRC of binary
+        update_manifest(os.path.join(pbw_tmp_dir, "basalt"))
+        # pass
 
     with zipfile.ZipFile(pbw_out_path, "w") as z:
         for root, dirs, files in os.walk(pbw_tmp_dir):
