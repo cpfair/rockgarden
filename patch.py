@@ -402,5 +402,3 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path, new_uuid=None):
         for root, dirs, files in os.walk(pbw_tmp_dir):
                 for file in files:
                     z.write(os.path.join(root, file), os.path.join(root, file).replace(pbw_tmp_dir, ""))
-
-patch_and_repack_pbw("wlcnew.pbw", "wlcnew.patched.pbw")
