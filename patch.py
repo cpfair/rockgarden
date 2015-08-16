@@ -7,13 +7,13 @@ import zipfile
 import json
 import re
 import logging
-import uuid
+
 FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
 logging.basicConfig(format=FORMAT)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-
+STRUCT_VERSION_ADDR=0x8
 LOAD_SIZE_ADDR=0xe
 CRC_ADDR=0x14
 NUM_RELOC_ENTRIES_ADDR=0x64
@@ -223,6 +223,9 @@ def patch_bin(bin_file_path, platform, new_uuid=None):
     # I guess I could do this all in memory but oh well
     bin_file = open(bin_file_path, "r+b")
 
+    # Make sure we know what we're dealing with
+    assert bin_file.read(8) == b'PBLAPP\0\0', "Invalid main binary header"
+    assert read_value_at_offset(STRUCT_VERSION_ADDR, "<H")[0] == 16, "Unknown main binary header format"
     # Figure out the end of the .data+.text section (immediately before relocs) in the main app
     load_size = read_value_at_offset(LOAD_SIZE_ADDR, "<H")[0]
     # ...and the end of .data+.text+.bss (which includes the relocation table, which we will relocate to the end of the binary)
@@ -399,3 +402,5 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path, new_uuid=None):
         for root, dirs, files in os.walk(pbw_tmp_dir):
                 for file in files:
                     z.write(os.path.join(root, file), os.path.join(root, file).replace(pbw_tmp_dir, ""))
+
+patch_and_repack_pbw("wlcnew.pbw", "wlcnew.patched.pbw")
