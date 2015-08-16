@@ -7,6 +7,7 @@ import zipfile
 import json
 import re
 import logging
+import uuid
 FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
 logging.basicConfig(format=FORMAT)
 logger = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ OFFSET_ADDR=0x10
 VIRTUAL_SIZE_ADDR=0x80
 STRUCT_SIZE_BYTES=0x82
 JUMP_TABLE_ADDR=0x5c
+UUID_ADDR=0x68
 
 scratch_dir = ".build-tmp"
 if not os.path.exists(scratch_dir):
@@ -124,7 +126,7 @@ def compile_mod_bin(infiles, intermdiatefile, outfile, platform, app_addr, bss_a
     compile(infiles, intermdiatefile, platform, linkflags=["-T" + ldfile_out_path])
     subprocess.check_call(["arm-none-eabi-objcopy", "-S", "-R", ".stack", "-R", ".priv_bss", "-R", ".bss", "-O", "binary", intermdiatefile, outfile])
 
-def patch_bin(bin_file_path, platform):
+def patch_bin(bin_file_path, platform, new_uuid=None):
     # By the end of this, we should have (in no particular order)
     # - compiled the mod binary with the BSS located at the end of the main app's .bss
     # - have inserted the mod binary between the app header and the main body of the app code
@@ -340,6 +342,10 @@ def patch_bin(bin_file_path, platform):
     write_value_at_offset(VIRTUAL_SIZE_ADDR, "<H", final_virtual_size)
     write_value_at_offset(LOAD_SIZE_ADDR, "<H", final_load_size)
     write_value_at_offset(JUMP_TABLE_ADDR, "<L", final_jump_table)
+    # If requested, rewrite UUID
+    if new_uuid:
+        bin_file.seek(UUID_ADDR)
+        bin_file.write(new_uuid.bytes)
 
     assert final_entrypoint % 4 == 0, "Main entrypoint not byte-aligned"
     assert mod_syscall_proxy_addr % 4 == 0, "Mod code not byte-aligned, falls at %x" % (mod_syscall_proxy_addr + STRUCT_SIZE_BYTES)
@@ -351,33 +357,46 @@ def update_manifest(app_dir):
             binfile=f.read()
             return stm32_crc.crc32(binfile)&0xFFFFFFFF
 
-    manifest_file_content = open(os.path.join(app_dir, "manifest.json"), "r+").read()
-    manifest_obj = json.loads(manifest_file_content)
+    manifest_obj = json.loads(open(os.path.join(app_dir, "manifest.json"), "r+").read())
 
     bin_crc = stm32crc(os.path.join(app_dir, "pebble-app.bin"))
     manifest_obj["application"]["crc"] = bin_crc
     manifest_obj["application"]["size"] = os.stat(os.path.join(app_dir, "pebble-app.bin")).st_size
     open(os.path.join(app_dir, "manifest.json"), "w").write(json.dumps(manifest_obj))
 
-def patch_and_repack_pbw(pbw_path, pbw_out_path):
+def update_appinfo(app_dir, new_uuid):
+    appinfo_obj = json.loads(open(os.path.join(app_dir, "appinfo.json"), "r+").read())
+
+    appinfo_obj["uuid"] = str(new_uuid)
+    open(os.path.join(app_dir, "appinfo.json"), "w").write(json.dumps(appinfo_obj))
+
+def patch_and_repack_pbw(pbw_path, pbw_out_path, update_uuid=False):
     pbw_tmp_dir = os.path.join(scratch_dir, "pbw")
     if os.path.exists(pbw_tmp_dir):
         shutil.rmtree(pbw_tmp_dir)
     os.mkdir(pbw_tmp_dir)
 
+    if update_uuid:
+        new_uuid = uuid.UUID(bytes=b"SAND" + uuid.uuid4().bytes[:12])
+    else:
+        new_uuid = None
+
     with zipfile.ZipFile(pbw_path, "r") as z:
         z.extractall(pbw_tmp_dir)
 
+    if new_uuid:
+        update_appinfo(pbw_tmp_dir, new_uuid)
+
     if os.path.join(pbw_tmp_dir, "pebble-app.bin"):
         logger.info("Patching Aplite binary")
-        patch_bin(os.path.join(pbw_tmp_dir, "pebble-app.bin"), platforms["aplite"])
+        patch_bin(os.path.join(pbw_tmp_dir, "pebble-app.bin"), platforms["aplite"], new_uuid)
         # Update CRC of binary
         update_manifest(pbw_tmp_dir)
 
     if os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
         logger.info("Patching Basalt binary")
         # Do the same for basalt
-        patch_bin(os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), platforms["basalt"])
+        patch_bin(os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), platforms["basalt"], new_uuid)
         update_manifest(os.path.join(pbw_tmp_dir, "basalt"))
 
     with zipfile.ZipFile(pbw_out_path, "w") as z:
@@ -387,4 +406,4 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path):
 
 
 
-patch_and_repack_pbw("qibla.pbw", "qibla.patched.pbw")
+patch_and_repack_pbw("qibla.pbw", "qibla.patched.pbw", update_uuid=True)
