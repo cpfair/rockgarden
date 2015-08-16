@@ -127,7 +127,7 @@ def compile_mod_bin(infiles, intermdiatefile, outfile, platform, app_addr, bss_a
     compile(infiles, intermdiatefile, platform, linkflags=["-T" + ldfile_out_path])
     subprocess.check_call(["arm-none-eabi-objcopy", "-S", "-R", ".stack", "-R", ".priv_bss", "-R", ".bss", "-O", "binary", intermdiatefile, outfile])
 
-def patch_bin(bin_file_path, platform, new_uuid=None):
+def patch_bin(mod_sources, bin_file_path, platform, new_uuid=None):
     # By the end of this, we should have (in no particular order)
     # - compiled the mod binary with the BSS located at the end of the main app's .bss
     # - have inserted the mod binary between the app header and the main body of the app code
@@ -236,7 +236,6 @@ def patch_bin(bin_file_path, platform, new_uuid=None):
 
     # Prep the mods by compiling the user code so we can see which functions they wish to patch
     mod_user_object_path = os.path.join(scratch_dir, "mods_user.o")
-    mod_sources = ["src/mods.c"]
     compile_mod_user_object(mod_sources, mod_user_object_path, platform)
 
     # Redefining a syscall fcn with __patch appended to the name will cause it to be overridden in the main app
@@ -374,7 +373,7 @@ def update_appinfo(app_dir, new_uuid):
     appinfo_obj["uuid"] = str(new_uuid)
     open(os.path.join(app_dir, "appinfo.json"), "w").write(json.dumps(appinfo_obj))
 
-def patch_and_repack_pbw(pbw_path, pbw_out_path, new_uuid=None):
+def patch_and_repack_pbw(mod_sources, pbw_path, pbw_out_path, new_uuid=None):
     pbw_tmp_dir = os.path.join(scratch_dir, "pbw")
     if os.path.exists(pbw_tmp_dir):
         shutil.rmtree(pbw_tmp_dir)
@@ -388,14 +387,14 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path, new_uuid=None):
 
     if os.path.join(pbw_tmp_dir, "pebble-app.bin"):
         logger.info("Patching Aplite binary")
-        patch_bin(os.path.join(pbw_tmp_dir, "pebble-app.bin"), platforms["aplite"], new_uuid)
+        patch_bin(mod_sources, os.path.join(pbw_tmp_dir, "pebble-app.bin"), platforms["aplite"], new_uuid)
         # Update CRC of binary
         update_manifest(pbw_tmp_dir)
 
     if os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
         logger.info("Patching Basalt binary")
         # Do the same for basalt
-        patch_bin(os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), platforms["basalt"], new_uuid)
+        patch_bin(mod_sources, os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), platforms["basalt"], new_uuid)
         update_manifest(os.path.join(pbw_tmp_dir, "basalt"))
 
     with zipfile.ZipFile(pbw_out_path, "w") as z:
