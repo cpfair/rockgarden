@@ -6,6 +6,12 @@ import stm32_crc
 import zipfile
 import json
 import re
+import logging
+FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
+logging.basicConfig(format=FORMAT)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
 
 LOAD_SIZE_ADDR=0xe
 CRC_ADDR=0x14
@@ -69,6 +75,7 @@ class Platform:
         libpebble_dsm_output = subprocess.check_output(["arm-none-eabi-objdump", "-d", self.lib])
         for call_match in re.finditer(r"<(?P<fcn>[^>]+)>:(?:\n.+){4}8:\s*(?P<idx>[0-9a-f]{8})", libpebble_dsm_output):
             self.syscall_table[call_match.group("fcn")] = int(call_match.group("idx"), 16)
+        logger.info("Read %d syscall table entries for %s", len(self.syscall_table.items()), self.name)
 
 platforms = {
     "aplite": Platform("aplite", "cortex-m3", ["sdk/aplite/include"], "sdk/aplite/lib/libpebble.a"),
@@ -100,8 +107,9 @@ def compile(infiles, outfile, platform, cflags=None, linkflags=None):
                  "--gc-sections"] + linkflags
 
     linkflags = ["-Wl,%s" % flag for flag in linkflags] # Since we're letting gcc link too
-
-    subprocess.check_call(["arm-none-eabi-gcc"] + cflags + linkflags + ["-o", outfile] + infiles)
+    cmd = ["arm-none-eabi-gcc"] + cflags + linkflags + ["-o", outfile] + infiles
+    logger.debug("Compiling with %s" % cmd)
+    subprocess.check_call(cmd)
 
 def compile_mod_user_object(infiles, outfile, platform):
     compile(infiles, outfile, platform, cflags=["-c"])
@@ -218,6 +226,7 @@ def patch_bin(bin_file_path, platform):
     virtual_size = read_value_at_offset(VIRTUAL_SIZE_ADDR, "<H")[0]
     main_entrypoint = read_value_at_offset(OFFSET_ADDR, "<L")[0]
     jump_table = read_value_at_offset(JUMP_TABLE_ADDR, "<L")[0]
+    logger.info("Main binary:\n\tLoad size\t%x\n\tVirt size\t%x\n\tEntry pt\t%x\n\tJump tbl\t%x", load_size, virtual_size, main_entrypoint, jump_table)
 
     # Prep the mods by compiling the user code so we can see which functions they wish to patch
     mod_user_object_path = os.path.join(scratch_dir, "mods_user.o")
@@ -254,8 +263,14 @@ def patch_bin(bin_file_path, platform):
     mod_true_load_size = os.stat(mods_final_path).st_size # Before padding
     mod_load_size = mod_true_load_size + mod_pre_pad + mod_post_pad
     mod_virtual_size = get_virtual_size(mods_final_intermediate_path) + mod_pre_pad + mod_post_pad
+    logger.info("Patch binary:\n\tLoad size\t%x\n\tVirt size\t%x\n\tPrec Pad\t%x\n\tPost pad\t%x", mod_load_size, mod_virtual_size, mod_pre_pad, mod_post_pad)
+
+    # With this info, we can also calculate the final values of most stuff
+    final_entrypoint = main_entrypoint + mod_load_size
+    final_jump_table = jump_table + mod_load_size
     final_virtual_size = virtual_size + mod_virtual_size
     final_load_size = load_size + mod_load_size
+    logger.info("Final binary:\n\tLoad size\t%x\n\tVirt size\t%x\n\tEntry pt\t%x\n\tJump tbl\t%x", final_load_size, final_virtual_size, final_entrypoint, final_jump_table)
 
     # Recompile & load result
     compile_mod_bin(mod_link_sources, mods_final_intermediate_path, mods_final_path, platform, STRUCT_SIZE_BYTES + mod_pre_pad, virtual_size + mod_load_size)
@@ -268,10 +283,12 @@ def patch_bin(bin_file_path, platform):
 
     # Update the relocation table entries, and their targets, by the amount we're going to insert after the header
     main_reloc_table_size = read_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L")[0]
-    print("main has ", main_reloc_table_size, "relocs")
+    logger.info("Rewriting %d relocation entries from main binary by offset %x", main_reloc_table_size, mod_load_size)
     for entry_idx in range(main_reloc_table_size):
+
         target_addr = read_value_at_offset(load_size + entry_idx * 4, "<L")[0]
         target_value = read_value_at_offset(target_addr, "<L")[0]
+        logger.debug("Main binary relocation table entry %d points to %x of value %x", entry_idx, target_addr, target_value)
         target_value += mod_load_size
         write_value_at_offset(target_addr, "<L", target_value)
         write_value_at_offset(load_size + entry_idx * 4, "<L", target_addr + mod_load_size)
@@ -286,20 +303,19 @@ def patch_bin(bin_file_path, platform):
     jump_to_pbl_function_signature = unhexify("03 A3 18 68 08 44 02 68 94 46 0F BC 60 47 00 BF A8 A8 A8 A8")
     jump_to_pbl_function_addr = main_binary.index(jump_to_pbl_function_signature)
     assert jump_to_pbl_function_addr
-    print("main jmp fcn", hex(jump_to_pbl_function_addr))
     # Replace with something that still grabs reads the offset table addr, but immediately hands off the the address of the method we specify (the mod's proxy)
     mod_syscall_proxy_addr = get_symbol_addr(mod_binary_nm_output, "jump_to_pbl_function__proxy")
     mod_syscall_proxy_jmp_addr = mod_syscall_proxy_addr + 1 # +1 to indicate THUMB 16-bit instruction
     replacement_fcn = unhexify("03 A3 18 68 00 4A 10 47") + struct.pack("<L", mod_syscall_proxy_jmp_addr) + unhexify("00 BF 00 BF A8 A8 A8 A8")
     assert len(replacement_fcn) == len(jump_to_pbl_function_signature)
     main_binary = check_replace(main_binary, jump_to_pbl_function_signature, replacement_fcn)
-    print("our proxy addr", hex(mod_syscall_proxy_addr))
+    logger.info("Patching main binary jump routine at %x to use proxy at %x", jump_to_pbl_function_addr, mod_syscall_proxy_addr)
 
     # update the mod's binary with the (eventual) address of the jump table placeholder
     mod_jump_table_ptr_addr = mod_binary.index(unhexify("a8a8a8a8"))
-    print("out jump table ptr", mod_jump_table_ptr_addr)
-    print("their jump table", jump_table)
-    mod_binary = check_replace(mod_binary, unhexify("a8a8a8a8"), struct.pack("<L", jump_table + mod_load_size))
+    relocated_main_jump_table = jump_table + mod_load_size
+    logger.info("Writing patch binary's jump indirection value at %x to %x", mod_jump_table_ptr_addr, relocated_main_jump_table)
+    mod_binary = check_replace(mod_binary, unhexify("a8a8a8a8"), struct.pack("<L", relocated_main_jump_table))
 
     bin_file.seek(STRUCT_SIZE_BYTES)
     # Insert the mod binary
@@ -308,32 +324,23 @@ def patch_bin(bin_file_path, platform):
     bin_file.write(main_binary)
     bin_file.write(main_reloc_table)
     # and, finally, ours (plus the header since we don't compile that in)
+    initial_added_reloc_entries_count = len(mod_reloc_entries)
     mod_reloc_entries.append(STRUCT_SIZE_BYTES + mod_load_size + jump_to_pbl_function_addr + 8) # For their jump to our proxy
     mod_reloc_entries.append(STRUCT_SIZE_BYTES + mod_jump_table_ptr_addr) # For our jump table ptr thing
-    print("mod reloc", mod_reloc_entries)
+    logger.info("Appending %d additional relocation entries, %d from patch binary", len(mod_reloc_entries), initial_added_reloc_entries_count)
+    logger.debug("Additional relocation entries: %s" % mod_reloc_entries)
     for entry in mod_reloc_entries:
         bin_file.write(struct.pack('<L',entry))
 
-    # Update the header with the new size of the reloc table
-    write_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L", main_reloc_table_size + len(mod_reloc_entries))
-
-    # Update it with the new entrypoint and sizes
-    final_entrypoint = main_entrypoint + mod_load_size
-    write_value_at_offset(OFFSET_ADDR, "<L", final_entrypoint)
-
-    # Update the new sizes
-    write_value_at_offset(VIRTUAL_SIZE_ADDR, "<H", final_virtual_size)
-    write_value_at_offset(LOAD_SIZE_ADDR, "<H", final_load_size)
-
-    # Update the CRC
+    # Update the header with the new values
     final_crc = stm32_crc.crc32(mod_binary + main_binary)
     write_value_at_offset(CRC_ADDR, "<L", final_crc)
-
-    # and the jump table addr
-    final_jump_table = jump_table + mod_load_size
+    write_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L", main_reloc_table_size + len(mod_reloc_entries))
+    write_value_at_offset(OFFSET_ADDR, "<L", final_entrypoint)
+    write_value_at_offset(VIRTUAL_SIZE_ADDR, "<H", final_virtual_size)
+    write_value_at_offset(LOAD_SIZE_ADDR, "<H", final_load_size)
     write_value_at_offset(JUMP_TABLE_ADDR, "<L", final_jump_table)
 
-    print("final entrypoint %x" % final_entrypoint)
     assert final_entrypoint % 4 == 0, "Main entrypoint not byte-aligned"
     assert mod_syscall_proxy_addr % 4 == 0, "Mod code not byte-aligned, falls at %x" % (mod_syscall_proxy_addr + STRUCT_SIZE_BYTES)
     # assert (mod_binary.index(unhexify("044a8a42")) + STRUCT_SIZE_BYTES) == mod_syscall_proxy_addr, "Proxy address reality mismatch"
@@ -361,18 +368,17 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path):
     with zipfile.ZipFile(pbw_path, "r") as z:
         z.extractall(pbw_tmp_dir)
 
-    patch_bin(os.path.join(pbw_tmp_dir, "pebble-app.bin"), platforms["aplite"])
-    # Update CRC of binary
-    update_manifest(pbw_tmp_dir)
-
-    # shutil.rmtree(os.path.join(pbw_tmp_dir, "basalt"))
+    if os.path.join(pbw_tmp_dir, "pebble-app.bin"):
+        logger.info("Patching Aplite binary")
+        patch_bin(os.path.join(pbw_tmp_dir, "pebble-app.bin"), platforms["aplite"])
+        # Update CRC of binary
+        update_manifest(pbw_tmp_dir)
 
     if os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
+        logger.info("Patching Basalt binary")
         # Do the same for basalt
         patch_bin(os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), platforms["basalt"])
-        # Update CRC of binary
         update_manifest(os.path.join(pbw_tmp_dir, "basalt"))
-        # pass
 
     with zipfile.ZipFile(pbw_out_path, "w") as z:
         for root, dirs, files in os.walk(pbw_tmp_dir):
