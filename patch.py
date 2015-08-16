@@ -342,6 +342,7 @@ def update_manifest(app_dir):
 
     bin_crc = stm32crc(os.path.join(app_dir, "pebble-app.bin"))
     manifest_obj["application"]["crc"] = bin_crc
+    manifest_obj["application"]["size"] = os.stat(os.path.join(app_dir, "pebble-app.bin")).st_size
     json.dump(manifest_obj, manifest_file)
     manifest_file.close()
 
