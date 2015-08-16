@@ -2,7 +2,6 @@ import subprocess
 import struct
 import os
 import shutil
-import sys
 import stm32_crc
 import zipfile
 import json
@@ -112,7 +111,7 @@ def compile_mod_bin(infiles, intermdiatefile, outfile, platform, app_addr, bss_a
     compile(infiles, intermdiatefile, platform, linkflags=["-T" + ldfile_out_path])
     subprocess.check_call(["arm-none-eabi-objcopy", "-S", "-R", ".stack", "-R", ".priv_bss", "-R", ".bss", "-O", "binary", intermdiatefile, outfile])
 
-def patch_bin(bin_file, platform):
+def patch_bin(bin_file_path, platform):
     # By the end of this, we should have (in no particular order)
     # - compiled the mod binary with the BSS located at the end of the main app's .bss
     # - have inserted the mod binary between the app header and the main body of the app code
@@ -203,6 +202,10 @@ def patch_bin(bin_file, platform):
         raise Exception("Could not locate symbol <%s> in binary! Failed to inject app metadata"%(symbol))
     def unhexify(str):
         return str.replace(" ", "").decode("hex")
+
+    # Open the binary
+    # I guess I could do this all in memory but oh well
+    bin_file = open(bin_file_path, "r+b")
 
     # Figure out the end of the .data+.text section (immediately before relocs) in the main app
     load_size = read_value_at_offset(LOAD_SIZE_ADDR, "<H")[0]
@@ -353,7 +356,7 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path):
     with zipfile.ZipFile(pbw_path, "r") as z:
         z.extractall(pbw_tmp_dir)
 
-    patch_bin(open(os.path.join(pbw_tmp_dir, "pebble-app.bin"), "r+b"), platforms["aplite"])
+    patch_bin(os.path.join(pbw_tmp_dir, "pebble-app.bin"), platforms["aplite"])
     # Update CRC of binary
     update_manifest(pbw_tmp_dir)
 
@@ -361,7 +364,7 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path):
 
     if os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
         # Do the same for basalt
-        patch_bin(open(os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), "r+b"), platforms["basalt"])
+        patch_bin(os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), platforms["basalt"])
         # Update CRC of binary
         update_manifest(os.path.join(pbw_tmp_dir, "basalt"))
         # pass
@@ -374,5 +377,3 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path):
 
 
 patch_and_repack_pbw("qibla.pbw", "qibla.patched.pbw")
-
-
