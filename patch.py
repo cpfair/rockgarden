@@ -101,6 +101,7 @@ def compile(infiles, outfile, platform, cflags=None, linkflags=None):
                 "-ffunction-sections",
                 "-fdata-sections",
                 "-std=c99",
+                "-Os",
                 "-nostdlib"] + ["-I%s" % path for path in platform.includes] + cflags
     if platform.cflags:
         cflags = cflags + platform.cflags
@@ -245,7 +246,7 @@ def patch_bin(bin_file_path, platform, new_uuid=None):
     proxy_asm_path = os.path.join(scratch_dir, "mods_proxy.s")
     proxy_switch_body = ["""    ldr r2, =%s @ %s's index\n    cmp r2, r1\n    beq %s""" % (hex(method_idx), method_name, method_name + "__proxy") for method_name, method_idx in proxied_syscalls_map.items()]
     proxy_asm = check_replace(proxy_asm, "@PROXY_SWITCH_BODY@", "\n".join(proxy_switch_body))
-    proxy_fcns_body = [""".type %s function\n%s:\n    pop {r0, r1, r2, r3}\n    b %s""" % (method_name + "__proxy", method_name + "__proxy", method_name + "__patch")]
+    proxy_fcns_body = [""".type %s function\n%s:\n    pop {r0, r1, r2, r3}\n    b %s""" % (method_name + "__proxy", method_name + "__proxy", method_name + "__patch") for method_name in proxied_syscalls_map.keys()]
     proxy_asm = check_replace(proxy_asm, "@PROXY_FCNS_BODY@", "\n".join(proxy_fcns_body))
     open(proxy_asm_path, "w").write(proxy_asm)
 
@@ -406,4 +407,4 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path, update_uuid=False):
 
 
 
-patch_and_repack_pbw("qibla.pbw", "qibla.patched.pbw", update_uuid=True)
+patch_and_repack_pbw("wlcnew.pbw", "wlcnew.patched.pbw", update_uuid=False)
