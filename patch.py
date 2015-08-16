@@ -371,16 +371,11 @@ def update_appinfo(app_dir, new_uuid):
     appinfo_obj["uuid"] = str(new_uuid)
     open(os.path.join(app_dir, "appinfo.json"), "w").write(json.dumps(appinfo_obj))
 
-def patch_and_repack_pbw(pbw_path, pbw_out_path, update_uuid=False):
+def patch_and_repack_pbw(pbw_path, pbw_out_path, new_uuid=None):
     pbw_tmp_dir = os.path.join(scratch_dir, "pbw")
     if os.path.exists(pbw_tmp_dir):
         shutil.rmtree(pbw_tmp_dir)
     os.mkdir(pbw_tmp_dir)
-
-    if update_uuid:
-        new_uuid = uuid.UUID(bytes=b"SAND" + uuid.uuid4().bytes[:12])
-    else:
-        new_uuid = None
 
     with zipfile.ZipFile(pbw_path, "r") as z:
         z.extractall(pbw_tmp_dir)
@@ -404,7 +399,3 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path, update_uuid=False):
         for root, dirs, files in os.walk(pbw_tmp_dir):
                 for file in files:
                     z.write(os.path.join(root, file), os.path.join(root, file).replace(pbw_tmp_dir, ""))
-
-
-
-patch_and_repack_pbw("wlcnew.pbw", "wlcnew.patched.pbw", update_uuid=False)
