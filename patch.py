@@ -6,6 +6,7 @@ import sys
 import stm32_crc
 import zipfile
 import json
+import re
 
 LOAD_SIZE_ADDR=0xe
 CRC_ADDR=0x14
@@ -26,40 +27,48 @@ class Platform:
         self.arch = arch
         self.includes = includes
         self.lib = lib
+        self.syscall_table = None
+        self._patch()
+        self._load_syscall_table()
+
+    def _patch(self):
+        def patch_pebble_header(src, dest):
+            header = open(src, "r").read()
+            header = header.replace('#include "src/resource_ids.auto.h"', '')
+            open(dest, "w").write(header)
+
+        def patch_pebble_lib(src, dest):
+            # We take advantage of a fortuitous nop at the end of this method to insert another LDR command
+            # Thus adding another layer of indirection, such that we only need to swap the table address out with the address of the main app's placeholder, not the table itself
+            pre  = "03 A3 18 68 08 44 02 68 94 46 0F BC 60 47 00 BF A8 A8 A8 A8"
+            post = "03 A3 18 68 00 68 08 44 02 68 94 46 0F BC 60 47 A8 A8 A8 A8"
+            pre, post = (item.replace(" ", "").decode("hex") for item in (pre, post))
+            bin_contents = open(src, "rb").read()
+            bin_contents = bin_contents.replace(pre, post)
+            open(dest, "wb").write(bin_contents)
+
+        dest_dir = os.path.join(scratch_dir, self.name)
+        if not os.path.exists(dest_dir):
+            os.mkdir(dest_dir)
+
+        new_header_path = os.path.join(dest_dir, "pebble.h")
+        patch_pebble_header(os.path.join(self.includes[0], "pebble.h"), new_header_path)
+        self.includes.insert(0, dest_dir) # So it gets picked first, falling back to the real dir otherwise
+
+        new_lib_path = os.path.join(dest_dir, "libpebble.patched.a")
+        patch_pebble_lib(self.lib, new_lib_path)
+        self.lib = new_lib_path
+
+    def _load_syscall_table(self):
+        self.syscall_table = {}
+        libpebble_dsm_output = subprocess.check_output(["arm-none-eabi-objdump", "-d", self.lib])
+        for call_match in re.finditer(r"<(?P<fcn>[^>]+)>:(?:\n.+){4}8:\s*(?P<idx>[0-9a-f]{8})", libpebble_dsm_output):
+            self.syscall_table[call_match.group("fcn")] = int(call_match.group("idx"), 16)
 
 platforms = {
     "aplite": Platform("aplite", "cortex-m3", ["sdk/aplite/include"], "sdk/aplite/lib/libpebble.a"),
     "basalt": Platform("basalt", "cortex-m4", ["sdk/basalt/include"], "sdk/basalt/lib/libpebble.a")
 }
-
-def patch_platform_files(platform):
-    def patch_pebble_header(src, dest):
-        header = open(src, "r").read()
-        header = header.replace('#include "src/resource_ids.auto.h"', '')
-        open(dest, "w").write(header)
-
-    def patch_pebble_lib(src, dest):
-        pre  = "03 A3 18 68 08 44 02 68 94 46 0F BC 60 47 00 BF A8 A8 A8 A8"
-        post = "03 A3 18 68 00 68 08 44 02 68 94 46 0F BC 60 47 A8 A8 A8 A8"
-        pre, post = (item.replace(" ", "").decode("hex") for item in (pre, post))
-        bin_contents = open(src, "rb").read()
-        bin_contents = bin_contents.replace(pre, post)
-        open(dest, "wb").write(bin_contents)
-
-    dest_dir = os.path.join(scratch_dir, platform.name)
-    if not os.path.exists(dest_dir):
-        os.mkdir(dest_dir)
-
-    new_header_path = os.path.join(dest_dir, "pebble.h")
-    patch_pebble_header(os.path.join(platform.includes[0], "pebble.h"), new_header_path)
-    platform.includes.insert(0, dest_dir) # So it gets picked first, falling back to the real dir otherwise
-
-    new_lib_path = os.path.join(dest_dir, "libpebble.patched.a")
-    patch_pebble_lib(platform.lib, new_lib_path)
-    platform.lib = new_lib_path
-
-
-[patch_platform_files(platform) for platform in platforms.values()]
 
 def compile(infiles, outfile, platform, cflags=None, linkflags=None):
     if not hasattr(infiles, "__iter__"):
@@ -68,7 +77,6 @@ def compile(infiles, outfile, platform, cflags=None, linkflags=None):
     cflags = cflags if cflags else []
     linkflags = linkflags if linkflags else []
 
-    platform = platforms[platform]
     if "-c" not in cflags: # To avoid the harmless warning
         infiles.append(platform.lib)
     # Common flags
@@ -101,9 +109,6 @@ def compile_mod_bin(infiles, intermdiatefile, outfile, platform, app_addr, bss_a
     compile(infiles, intermdiatefile, platform, linkflags=["-T" + ldfile_out_path])
     subprocess.check_call(["arm-none-eabi-objcopy", "-S", "-R", ".stack", "-R", ".priv_bss", "-R", ".bss", "-O", "binary", intermdiatefile, outfile])
 
-# compile_mod_user_object("src/mods.c", os.path.join(scratch_dir, "mods_user.o"), "aplite")
-# compile_mod_bin([os.path.join(scratch_dir, "mods_user.o"), "src/mods.s"], os.path.join(scratch_dir, "mods_final.bin"), "aplite", 0x84, 3576)
-
 def patch_bin(bin_file, platform):
     # By the end of this, we should have (in no particular order)
     # - compiled the mod binary with the BSS located at the end of the main app's .bss
@@ -129,7 +134,6 @@ def patch_bin(bin_file, platform):
         readelf_bss_output=readelf_bss_process.communicate()[0]
         last_section_end_addr=0
         for line in readelf_bss_output.splitlines():
-            print(line)
             if len(line)<10:
                 continue
             line=line[6:]
@@ -180,11 +184,13 @@ def patch_bin(bin_file, platform):
                     entries.append(i)
                 break
         return entries
-    def get_nm_output(elf_file):
+    def get_nm_output(elf_file, raw=False):
         nm_process=subprocess.Popen(['arm-none-eabi-nm',elf_file],stdout=subprocess.PIPE)
         nm_output=nm_process.communicate()[0]
         if not nm_output:
             raise RuntimeError("Invalid binary")
+        if raw:
+            return nm_output
         nm_output=[line.split()for line in nm_output.splitlines()]
         return nm_output
     def get_symbol_addr(nm_output,symbol):
@@ -202,26 +208,38 @@ def patch_bin(bin_file, platform):
     main_entrypoint = read_value_at_offset(OFFSET_ADDR, "<L")[0]
     jump_table = read_value_at_offset(JUMP_TABLE_ADDR, "<L")[0]
 
-    # Prep the mods by compiling the user code and seeing which functions they wish to patch
+    # Prep the mods by compiling the user code so we can see which functions they wish to patch
     mod_user_object_path = os.path.join(scratch_dir, "mods_user.o")
     mod_sources = ["src/mods.c"]
     compile_mod_user_object(mod_sources, mod_user_object_path, platform)
-    mod_user_object_nm_output = get_nm_output(mod_user_object_path)
-    mod_link_sources = [mod_user_object_path, "src/mods.s"]
-    mods_final_intermediate_path = os.path.join(scratch_dir, "mods_final.o")
-    mods_final_path = os.path.join(scratch_dir, "mods_final.bin")
-    # Do things with it: todo
+
+    # Redefining a syscall fcn with __patch appended to the name will cause it to be overridden in the main app
+    proxied_syscalls = re.findall(r"(\w+)__patch", get_nm_output(mod_user_object_path, raw=True))
+    proxied_syscalls_map = {}
+    for method in proxied_syscalls:
+        proxied_syscalls_map[method] = platform.syscall_table[method]
+
+    proxy_asm = open("mods_proxy.template.s", "r").read()
+    proxy_asm_path = os.path.join(scratch_dir, "mods_proxy.s")
+    proxy_switch_body = ["""    ldr r2, =%s @ %s's index\n    cmp r2, r1\n    beq %s""" % (hex(method_idx), method_name, method_name + "__proxy") for method_name, method_idx in proxied_syscalls_map.items()]
+    proxy_asm = proxy_asm.replace("@PROXY_SWITCH_BODY@", "\n".join(proxy_switch_body))
+    proxy_fcns_body = [""".type %s function\n%s:\n    pop {r0, r1, r2, r3}\n    b %s""" % (method_name + "__proxy", method_name + "__proxy", method_name + "__patch")]
+    proxy_asm = proxy_asm.replace("@PROXY_FCNS_BODY@", "\n".join(proxy_fcns_body))
+    open(proxy_asm_path, "w").write(proxy_asm)
+
 
     # Compile the final binary once, since we need to know its dimensions to set the BSS section correctly the second time around
+    mod_link_sources = [mod_user_object_path, proxy_asm_path]
+    mods_final_intermediate_path = os.path.join(scratch_dir, "mods_final.o")
+    mods_final_path = os.path.join(scratch_dir, "mods_final.bin")
     compile_mod_bin(mod_link_sources, mods_final_intermediate_path, mods_final_path, platform, 0x00, 0x00, "APP")
-
-    mod_pre_pad = 2 # This breaks everything
-    mod_post_pad = 2 # ...this fixes it? We need to word-align the mod start, and the main app's entrypoint, for ARM EABI
 
     # Then, Recompile the mods with the BSS set to the end of the virtual_size (i.e. the eventual end of the main app's bss) now that we know it
     # This is a bit sketch since, in order to know the final virtual_size, we need to know the size of the mod's code and BSS
     # ...which requires compiling it
     # ...so I hope the size doesn't somehow change when we move the BSS (it shouldn't, it looks like all BSS stuff is ending up in the GOT)
+    mod_pre_pad = 2 # This breaks everything
+    mod_post_pad = 2 # ...this fixes it? We need to word-align the mod start, and the main app's entrypoint, for ARM EABI
     mod_true_load_size = os.stat(mods_final_path).st_size # Before padding
     mod_load_size = mod_true_load_size + mod_pre_pad + mod_post_pad
     mod_virtual_size = get_virtual_size(mods_final_intermediate_path) + mod_pre_pad + mod_post_pad
@@ -308,7 +326,7 @@ def patch_bin(bin_file, platform):
     print("final entrypoint %x" % final_entrypoint)
     assert final_entrypoint % 4 == 0, "Main entrypoint not byte-aligned"
     assert mod_syscall_proxy_addr % 4 == 0, "Mod code not byte-aligned, falls at %x" % (mod_syscall_proxy_addr + STRUCT_SIZE_BYTES)
-    assert (mod_binary.index(unhexify("044a8a42")) + STRUCT_SIZE_BYTES) == mod_syscall_proxy_addr, "Proxy address reality mismatch"
+    # assert (mod_binary.index(unhexify("044a8a42")) + STRUCT_SIZE_BYTES) == mod_syscall_proxy_addr, "Proxy address reality mismatch"
 
 def update_manifest(app_dir):
     def stm32crc(path):
@@ -334,7 +352,7 @@ def patch_and_repack_pbw(pbw_path, pbw_out_path):
     with zipfile.ZipFile(pbw_path, "r") as z:
         z.extractall(pbw_tmp_dir)
 
-    patch_bin(open(os.path.join(pbw_tmp_dir, "pebble-app.bin"), "r+b"), "aplite")
+    patch_bin(open(os.path.join(pbw_tmp_dir, "pebble-app.bin"), "r+b"), platforms["aplite"])
     # Update CRC of binary
     update_manifest(pbw_tmp_dir)
 
