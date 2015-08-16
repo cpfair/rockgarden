@@ -1,7 +1,6 @@
 #include <pebble.h>
-int hey;
 
 void window_stack_push__patch(Window *window, bool animated) {
-  hey = 1;
+  light_enable(true);
   window_stack_push(window, animated);
 }
