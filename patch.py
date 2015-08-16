@@ -19,6 +19,11 @@ scratch_dir = ".build-tmp"
 if not os.path.exists(scratch_dir):
     os.mkdir(scratch_dir)
 
+def check_replace(obj, find, replace):
+    old_obj = obj
+    obj = obj.replace(find, replace)
+    assert old_obj != obj, "Failed to find %s in %s to replace" % (obj, find)
+    return obj
 
 class Platform:
     def __init__(self, name, arch, includes, lib, cflags=None):
@@ -34,7 +39,7 @@ class Platform:
     def _patch(self):
         def patch_pebble_header(src, dest):
             header = open(src, "r").read()
-            header = header.replace('#include "src/resource_ids.auto.h"', '')
+            header = check_replace(header, '#include "src/resource_ids.auto.h"', '')
             open(dest, "w").write(header)
 
         def patch_pebble_lib(src, dest):
@@ -44,7 +49,7 @@ class Platform:
             post = "03 A3 18 68 00 68 08 44 02 68 94 46 0F BC 60 47 A8 A8 A8 A8"
             pre, post = (item.replace(" ", "").decode("hex") for item in (pre, post))
             bin_contents = open(src, "rb").read()
-            bin_contents = bin_contents.replace(pre, post)
+            bin_contents = check_replace(bin_contents, pre, post)
             open(dest, "wb").write(bin_contents)
 
         dest_dir = os.path.join(scratch_dir, self.name)
@@ -103,9 +108,9 @@ def compile_mod_user_object(infiles, outfile, platform):
 
 def compile_mod_bin(infiles, intermdiatefile, outfile, platform, app_addr, bss_addr, bss_section="BSS"):
     ldfile_template = open("mods_layout.template.ld", "r").read()
-    ldfile_template = ldfile_template.replace("@BSS@", hex(bss_addr)) # The end of their BSS, plus what we'll insert
-    ldfile_template = ldfile_template.replace("@BSS_SECTION@", bss_section) # Where to put it at all
-    ldfile_template = ldfile_template.replace("@APP@", hex(app_addr)) # Where the rest of the app will get mounted
+    ldfile_template = check_replace(ldfile_template, "@BSS@", hex(bss_addr)) # The end of their BSS, plus what we'll insert
+    ldfile_template = check_replace(ldfile_template, "@BSS_SECTION@", bss_section) # Where to put it at all
+    ldfile_template = check_replace(ldfile_template, "@APP@", hex(app_addr)) # Where the rest of the app will get mounted
     ldfile_out_path = os.path.join(scratch_dir, "mods.ld")
     open(ldfile_out_path, "w").write(ldfile_template)
     compile(infiles, intermdiatefile, platform, linkflags=["-T" + ldfile_out_path])
@@ -228,9 +233,9 @@ def patch_bin(bin_file_path, platform):
     proxy_asm = open("mods_proxy.template.s", "r").read()
     proxy_asm_path = os.path.join(scratch_dir, "mods_proxy.s")
     proxy_switch_body = ["""    ldr r2, =%s @ %s's index\n    cmp r2, r1\n    beq %s""" % (hex(method_idx), method_name, method_name + "__proxy") for method_name, method_idx in proxied_syscalls_map.items()]
-    proxy_asm = proxy_asm.replace("@PROXY_SWITCH_BODY@", "\n".join(proxy_switch_body))
+    proxy_asm = check_replace(proxy_asm, "@PROXY_SWITCH_BODY@", "\n".join(proxy_switch_body))
     proxy_fcns_body = [""".type %s function\n%s:\n    pop {r0, r1, r2, r3}\n    b %s""" % (method_name + "__proxy", method_name + "__proxy", method_name + "__patch")]
-    proxy_asm = proxy_asm.replace("@PROXY_FCNS_BODY@", "\n".join(proxy_fcns_body))
+    proxy_asm = check_replace(proxy_asm, "@PROXY_FCNS_BODY@", "\n".join(proxy_fcns_body))
     open(proxy_asm_path, "w").write(proxy_asm)
 
 
@@ -287,14 +292,14 @@ def patch_bin(bin_file_path, platform):
     mod_syscall_proxy_jmp_addr = mod_syscall_proxy_addr + 1 # +1 to indicate THUMB 16-bit instruction
     replacement_fcn = unhexify("03 A3 18 68 00 4A 10 47") + struct.pack("<L", mod_syscall_proxy_jmp_addr) + unhexify("00 BF 00 BF A8 A8 A8 A8")
     assert len(replacement_fcn) == len(jump_to_pbl_function_signature)
-    main_binary = main_binary.replace(jump_to_pbl_function_signature, replacement_fcn)
+    main_binary = check_replace(main_binary, jump_to_pbl_function_signature, replacement_fcn)
     print("our proxy addr", hex(mod_syscall_proxy_addr))
 
     # update the mod's binary with the (eventual) address of the jump table placeholder
     mod_jump_table_ptr_addr = mod_binary.index(unhexify("a8a8a8a8"))
     print("out jump table ptr", mod_jump_table_ptr_addr)
     print("their jump table", jump_table)
-    mod_binary = mod_binary.replace(unhexify("a8a8a8a8"), struct.pack("<L", jump_table + mod_load_size))
+    mod_binary = check_replace(mod_binary, unhexify("a8a8a8a8"), struct.pack("<L", jump_table + mod_load_size))
 
     bin_file.seek(STRUCT_SIZE_BYTES)
     # Insert the mod binary
