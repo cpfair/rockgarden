@@ -27,7 +27,7 @@ SECTIONS
     {
         *(.bss)
         *(.bss.*)
-    } > BSS
+    } > @BSS_SECTION@
 
     DISCARD :
     {

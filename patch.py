@@ -7,7 +7,6 @@ import stm32_crc
 import zipfile
 import json
 
-
 LOAD_SIZE_ADDR=0xe
 CRC_ADDR=0x14
 NUM_RELOC_ENTRIES_ADDR=0x64
@@ -16,36 +15,96 @@ VIRTUAL_SIZE_ADDR=0x80
 STRUCT_SIZE_BYTES=0x82
 JUMP_TABLE_ADDR=0x5c
 
+scratch_dir = ".build-tmp"
+if not os.path.exists(scratch_dir):
+    os.mkdir(scratch_dir)
 
-target_pbw = "/Volumes/MacintoshHD/Users/collinfair/Pebble/qibla/build/qibla.pbw"
 
-# First, compile the mods with the shell script that I'll incorporate in here soon enough
-subprocess.check_call(["sh", "build_mods.sh"])
+class Platform:
+    def __init__(self, name, arch, includes, lib):
+        self.name = name
+        self.arch = arch
+        self.includes = includes
+        self.lib = lib
 
-def compile(cflags=None, linkflags=None, infiles, outfile):
+platforms = {
+    "aplite": Platform("aplite", "cortex-m3", ["sdk/aplite/include"], "sdk/aplite/lib/libpebble.a"),
+    "basalt": Platform("basalt", "cortex-m4", ["sdk/basalt/include"], "sdk/basalt/lib/libpebble.a")
+}
+
+def patch_platform_files(platform):
+    def patch_pebble_header(src, dest):
+        header = open(src, "r").read()
+        header = header.replace('#include "src/resource_ids.auto.h"', '')
+        open(dest, "w").write(header)
+
+    def patch_pebble_lib(src, dest):
+        pre  = "03 A3 18 68 08 44 02 68 94 46 0F BC 60 47 00 BF A8 A8 A8 A8"
+        post = "03 A3 18 68 00 68 08 44 02 68 94 46 0F BC 60 47 A8 A8 A8 A8"
+        pre, post = (item.replace(" ", "").decode("hex") for item in (pre, post))
+        bin_contents = open(src, "rb").read()
+        bin_contents = bin_contents.replace(pre, post)
+        open(dest, "wb").write(bin_contents)
+
+    dest_dir = os.path.join(scratch_dir, platform.name)
+    if not os.path.exists(dest_dir):
+        os.mkdir(dest_dir)
+
+    new_header_path = os.path.join(dest_dir, "pebble.h")
+    patch_pebble_header(os.path.join(platform.includes[0], "pebble.h"), new_header_path)
+    platform.includes.insert(0, dest_dir) # So it gets picked first, falling back to the real dir otherwise
+
+    new_lib_path = os.path.join(dest_dir, "libpebble.patched.a")
+    patch_pebble_lib(platform.lib, new_lib_path)
+    platform.lib = new_lib_path
+
+
+[patch_platform_files(platform) for platform in platforms.values()]
+
+def compile(infiles, outfile, platform, cflags=None, linkflags=None):
+    if not hasattr(infiles, "__iter__"):
+        infiles = [infiles]
+
     cflags = cflags if cflags else []
     linkflags = linkflags if linkflags else []
 
+    platform = platforms[platform]
+    if "-c" not in cflags: # To avoid the harmless warning
+        infiles.append(platform.lib)
     # Common flags
-    cflags = [  "-mcpu=cortex-m3",
+    cflags = [  "-mcpu=%s" % platform.arch,
                 "-mthumb",
                 "-fPIC",
                 "-fPIE",
                 "-ffunction-sections",
                 "-fdata-sections",
                 "-std=c99",
-                "-I./",
-                "-I./src"
-                "-nostdlib"
-    ] + cflags
+                "-nostdlib"] + ["-I%s" % path for path in platform.includes] + cflags
+
+    linkflags = ["-e_entry",
+                 "--gc-sections"] + linkflags
 
     linkflags = ["-Wl,%s" % flag for flag in linkflags] # Since we're letting gcc link too
 
     subprocess.check_call(["arm-none-eabi-gcc"] + cflags + linkflags + ["-o", outfile] + infiles)
 
-def compile_mod()
+def compile_mod_user_object(infiles, outfile, platform):
+    compile(infiles, outfile, platform, cflags=["-c"])
 
-def patch_bin(bin_file):
+def compile_mod_bin(infiles, intermdiatefile, outfile, platform, app_addr, bss_addr, bss_section="BSS"):
+    ldfile_template = open("mods_layout.template.ld", "r").read()
+    ldfile_template = ldfile_template.replace("@BSS@", hex(bss_addr)) # The end of their BSS, plus what we'll insert
+    ldfile_template = ldfile_template.replace("@BSS_SECTION@", bss_section) # Where to put it at all
+    ldfile_template = ldfile_template.replace("@APP@", hex(app_addr)) # Where the rest of the app will get mounted
+    ldfile_out_path = os.path.join(scratch_dir, "mods.ld")
+    open(ldfile_out_path, "w").write(ldfile_template)
+    compile(infiles, intermdiatefile, platform, linkflags=["-T" + ldfile_out_path])
+    subprocess.check_call(["arm-none-eabi-objcopy", "-S", "-R", ".stack", "-R", ".priv_bss", "-R", ".bss", "-O", "binary", intermdiatefile, outfile])
+
+# compile_mod_user_object("src/mods.c", os.path.join(scratch_dir, "mods_user.o"), "aplite")
+# compile_mod_bin([os.path.join(scratch_dir, "mods_user.o"), "src/mods.s"], os.path.join(scratch_dir, "mods_final.bin"), "aplite", 0x84, 3576)
+
+def patch_bin(bin_file, platform):
     # By the end of this, we should have (in no particular order)
     # - compiled the mod binary with the BSS located at the end of the main app's .bss
     # - have inserted the mod binary between the app header and the main body of the app code
@@ -70,6 +129,7 @@ def patch_bin(bin_file):
         readelf_bss_output=readelf_bss_process.communicate()[0]
         last_section_end_addr=0
         for line in readelf_bss_output.splitlines():
+            print(line)
             if len(line)<10:
                 continue
             line=line[6:]
@@ -135,36 +195,49 @@ def patch_bin(bin_file):
     def unhexify(str):
         return str.replace(" ", "").decode("hex")
 
-    mod_pre_pad = 2 # This breaks everything
-    mod_post_pad = 2 # this fixes it? We need to word-align the mod start, and the main app's entrypoint, for ARM EABI
-    # Figure out the end of the .data+.text section (immediately before relocs)
+    # Figure out the end of the .data+.text section (immediately before relocs) in the main app
     load_size = read_value_at_offset(LOAD_SIZE_ADDR, "<H")[0]
     # ...and the end of .data+.text+.bss (which includes the relocation table, which we will relocate to the end of the binary)
     virtual_size = read_value_at_offset(VIRTUAL_SIZE_ADDR, "<H")[0]
     main_entrypoint = read_value_at_offset(OFFSET_ADDR, "<L")[0]
     jump_table = read_value_at_offset(JUMP_TABLE_ADDR, "<L")[0]
 
-    # compile the mods with the BSS set to the end of the virtual_size (i.e. the end of the main app's bss)
+    # Prep the mods by compiling the user code and seeing which functions they wish to patch
+    mod_user_object_path = os.path.join(scratch_dir, "mods_user.o")
+    mod_sources = ["src/mods.c"]
+    compile_mod_user_object(mod_sources, mod_user_object_path, platform)
+    mod_user_object_nm_output = get_nm_output(mod_user_object_path)
+    mod_link_sources = [mod_user_object_path, "src/mods.s"]
+    mods_final_intermediate_path = os.path.join(scratch_dir, "mods_final.o")
+    mods_final_path = os.path.join(scratch_dir, "mods_final.bin")
+    # Do things with it: todo
+
+    # Compile the final binary once, since we need to know its dimensions to set the BSS section correctly the second time around
+    compile_mod_bin(mod_link_sources, mods_final_intermediate_path, mods_final_path, platform, 0x00, 0x00, "APP")
+
+    mod_pre_pad = 2 # This breaks everything
+    mod_post_pad = 2 # ...this fixes it? We need to word-align the mod start, and the main app's entrypoint, for ARM EABI
+
+    # Then, Recompile the mods with the BSS set to the end of the virtual_size (i.e. the eventual end of the main app's bss) now that we know it
     # This is a bit sketch since, in order to know the final virtual_size, we need to know the size of the mod's code and BSS
     # ...which requires compiling it
     # ...so I hope the size doesn't somehow change when we move the BSS (it shouldn't, it looks like all BSS stuff is ending up in the GOT)
-    mod_load_size = os.stat("mods.bin").st_size + mod_pre_pad + mod_post_pad
-    mod_virtual_size = get_virtual_size("mods.o") + mod_pre_pad + mod_post_pad
+    mod_true_load_size = os.stat(mods_final_path).st_size # Before padding
+    mod_load_size = mod_true_load_size + mod_pre_pad + mod_post_pad
+    mod_virtual_size = get_virtual_size(mods_final_intermediate_path) + mod_pre_pad + mod_post_pad
     final_virtual_size = virtual_size + mod_virtual_size
     final_load_size = load_size + mod_load_size
-    mod_ld_map = open("mods_layout.template.ld", "r").read()
-    mod_ld_map = mod_ld_map.replace("@BSS@", hex(virtual_size + mod_load_size)) # The end of their BSS, plus what we'll insert
-    mod_ld_map = mod_ld_map.replace("@APP@", hex(STRUCT_SIZE_BYTES + mod_pre_pad)) # Where the rest of the app will get mounted
-    open("mods_layout.ld", "w").write(mod_ld_map)
 
     # Recompile & load result
-    subprocess.check_call(["sh", "build_mods.sh"])
-    mod_binary = open("mods.bin", "rb").read()
-    mod_binary = chr(0) * mod_pre_pad + mod_binary + chr(0) * mod_post_pad
-    mod_binary_nm_output = get_nm_output("mods.o")
-    mod_reloc_entries = [x for x in get_relocate_entries("mods.o")]
+    compile_mod_bin(mod_link_sources, mods_final_intermediate_path, mods_final_path, platform, STRUCT_SIZE_BYTES + mod_pre_pad, virtual_size + mod_load_size)
+    mod_binary = open(mods_final_path, "rb").read()
+    assert len(mod_binary) == mod_true_load_size, "Mod binary size changed after relocating BSS/APP sections"
 
-    # Update the relocationt able entries, and their targets, by the amount we're going to insert after the header
+    mod_binary = chr(0) * mod_pre_pad + mod_binary + chr(0) * mod_post_pad
+    mod_binary_nm_output = get_nm_output(mods_final_intermediate_path)
+    mod_reloc_entries = [x for x in get_relocate_entries(mods_final_intermediate_path)]
+
+    # Update the relocation table entries, and their targets, by the amount we're going to insert after the header
     main_reloc_table_size = read_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L")[0]
     print("main has ", main_reloc_table_size, "relocs")
     for entry_idx in range(main_reloc_table_size):
@@ -253,27 +326,29 @@ def update_manifest(app_dir):
     manifest_file.close()
 
 def patch_and_repack_pbw(pbw_path, pbw_out_path):
-    if os.path.exists("pbw_tmp"):
-        shutil.rmtree("pbw_tmp")
-    os.mkdir("pbw_tmp")
+    pbw_tmp_dir = os.path.join(scratch_dir, "pbw")
+    if os.path.exists(pbw_tmp_dir):
+        shutil.rmtree(pbw_tmp_dir)
+    os.mkdir(pbw_tmp_dir)
 
     with zipfile.ZipFile(pbw_path, "r") as z:
-        z.extractall("pbw_tmp")
+        z.extractall(pbw_tmp_dir)
 
-    patch_bin(open("pbw_tmp/pebble-app.bin", "r+b"))
+    patch_bin(open(os.path.join(pbw_tmp_dir, "pebble-app.bin"), "r+b"), "aplite")
     # Update CRC of binary
-    update_manifest("pbw_tmp")
+    update_manifest(pbw_tmp_dir)
 
-    if os.path.exists("pbw_tmp/basalt"):
-        # Do the same for basalt
-        patch_bin(open("pbw_tmp/basalt/pebble-app.bin", "r+b"))
-        # Update CRC of binary
-        update_manifest("pbw_tmp/basalt")
+    shutil.rmtree(os.path.join(pbw_tmp_dir, "basalt"))
+    # if os.path.exists("pbw_tmp/basalt"):
+    #     # Do the same for basalt
+    #     patch_bin(open("pbw_tmp/basalt/pebble-app.bin", "r+b"))
+    #     # Update CRC of binary
+    #     update_manifest("pbw_tmp/basalt")
 
     with zipfile.ZipFile(pbw_out_path, "w") as z:
-        for root, dirs, files in os.walk("pbw_tmp"):
+        for root, dirs, files in os.walk(pbw_tmp_dir):
                 for file in files:
-                    z.write(os.path.join(root, file), os.path.join(root, file).replace("pbw_tmp/", ""))
+                    z.write(os.path.join(root, file), os.path.join(root, file).replace(pbw_tmp_dir, ""))
 
 
 
