@@ -82,7 +82,7 @@ class Platform:
         logger.info("Read %d syscall table entries for %s", len(self.syscall_table.items()), self.name)
 
 
-class PBWPatcher:
+class Patcher:
     def __init__(self, scratch_dir=".pebble-patch-tmp"):
         # Set up the scratch directory
         self._scratch_dir = scratch_dir
@@ -90,12 +90,12 @@ class PBWPatcher:
             os.mkdir(self._scratch_dir)
 
         # Prepare the SDK for compilation (we only need to do this once, really)
-        if not getattr(PBWPatcher, "_platforms", None):
+        if not getattr(Patcher, "_platforms", None):
             try:
                 sdk_path = os.path.dirname(os.path.dirname(os.path.join(subprocess.check_output(["which", "pebble"]).strip())))
             except subprocess.CalledProcessError:
                 raise RuntimeError("pebble command-line tool not found in PATH")
-            PBWPatcher._platforms = {
+            Patcher._platforms = {
                 "aplite": Platform("aplite", "cortex-m3", [os.path.join(sdk_path, "Pebble", "aplite", "include")], os.path.join(sdk_path, "Pebble", "aplite", "lib", "libpebble.a"), ["-DPBL_PLATFORM_APLITE", "-DPBL_BW"], scratch_dir=self._scratch_dir),
                 "basalt": Platform("basalt", "cortex-m4", [os.path.join(sdk_path, "Pebble", "basalt", "include")], os.path.join(sdk_path, "Pebble", "basalt", "lib", "libpebble.a"), ["-DPBL_PLATFORM_BASALT", "-DPBL_COLOR", "-D_TIME_H_"], scratch_dir=self._scratch_dir)
             }
@@ -408,14 +408,14 @@ class PBWPatcher:
         if c_sources:
             if os.path.join(pbw_tmp_dir, "pebble-app.bin"):
                 logger.info("Patching Aplite binary")
-                self._patch_bin(c_sources, os.path.join(pbw_tmp_dir, "pebble-app.bin"), PBWPatcher._platforms["aplite"], new_uuid)
+                self._patch_bin(c_sources, os.path.join(pbw_tmp_dir, "pebble-app.bin"), Patcher._platforms["aplite"], new_uuid)
                 # Update CRC of binary
                 self._update_manifest(pbw_tmp_dir)
 
             if os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
                 logger.info("Patching Basalt binary")
                 # Do the same for basalt
-                self._patch_bin(c_sources, os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), PBWPatcher._platforms["basalt"], new_uuid)
+                self._patch_bin(c_sources, os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), Patcher._platforms["basalt"], new_uuid)
                 self._update_manifest(os.path.join(pbw_tmp_dir, "basalt"))
 
         if js_sources:
