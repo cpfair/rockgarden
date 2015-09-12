@@ -29,6 +29,22 @@ def check_replace(obj, find, replace):
 def unhexify(str):
     return str.replace(" ", "").decode("hex")
 
+
+class SDK:
+    @classmethod
+    def path(cls):
+        if not hasattr(cls, "_path"):
+            try:
+                cls._path = os.path.dirname(os.path.dirname(os.path.join(subprocess.check_output(["which", "pebble"]).strip())))
+            except subprocess.CalledProcessError:
+                raise RuntimeError("pebble command-line tool not found in PATH")
+        return cls._path
+
+    @classmethod
+    def arm_tool(cls, tool):
+        return os.path.join(cls.path(), "arm-cs-tools", "bin", "arm-none-eabi-%s" % tool)
+
+
 class Platform:
     def __init__(self, name, arch, includes, lib, cflags=None, scratch_dir=".pbw-patch-platform-tmp"):
         self.name = name
@@ -73,7 +89,7 @@ class Platform:
 
     def _load_syscall_table(self):
         self.syscall_table = {}
-        libpebble_dsm_output = subprocess.check_output(["arm-none-eabi-objdump", "-d", self.lib])
+        libpebble_dsm_output = subprocess.check_output([SDK.arm_tool("objdump"), "-d", self.lib])
         for call_match in re.finditer(r"<(?P<fcn>[^>]+)>:(?:\n.+){4}8:\s*(?P<idx>[0-9a-f]{8})", libpebble_dsm_output):
             self.syscall_table[call_match.group("fcn")] = int(call_match.group("idx"), 16)
         logger.info("Read %d syscall table entries for %s", len(self.syscall_table.items()), self.name)
@@ -88,13 +104,9 @@ class Patcher:
 
         # Prepare the SDK for compilation (we only need to do this once, really)
         if not getattr(Patcher, "_platforms", None):
-            try:
-                sdk_path = os.path.dirname(os.path.dirname(os.path.join(subprocess.check_output(["which", "pebble"]).strip())))
-            except subprocess.CalledProcessError:
-                raise RuntimeError("pebble command-line tool not found in PATH")
             Patcher._platforms = {
-                "aplite": Platform("aplite", "cortex-m3", [os.path.join(sdk_path, "Pebble", "aplite", "include")], os.path.join(sdk_path, "Pebble", "aplite", "lib", "libpebble.a"), ["-DPBL_PLATFORM_APLITE", "-DPBL_BW"], scratch_dir=self._scratch_dir),
-                "basalt": Platform("basalt", "cortex-m4", [os.path.join(sdk_path, "Pebble", "basalt", "include")], os.path.join(sdk_path, "Pebble", "basalt", "lib", "libpebble.a"), ["-DPBL_PLATFORM_BASALT", "-DPBL_COLOR", "-D_TIME_H_"], scratch_dir=self._scratch_dir)
+                "aplite": Platform("aplite", "cortex-m3", [os.path.join(SDK.path(), "Pebble", "aplite", "include")], os.path.join(SDK.path(), "Pebble", "aplite", "lib", "libpebble.a"), ["-DPBL_PLATFORM_APLITE", "-DPBL_BW"], scratch_dir=self._scratch_dir),
+                "basalt": Platform("basalt", "cortex-m4", [os.path.join(SDK.path(), "Pebble", "basalt", "include")], os.path.join(SDK.path(), "Pebble", "basalt", "lib", "libpebble.a"), ["-DPBL_PLATFORM_BASALT", "-DPBL_COLOR", "-D_TIME_H_"], scratch_dir=self._scratch_dir)
             }
 
     def _compile(self, infiles, outfile, platform, cflags=None, linkflags=None):
@@ -123,7 +135,7 @@ class Patcher:
                      "--gc-sections"] + linkflags
 
         linkflags = ["-Wl,%s" % flag for flag in linkflags] # Since we're letting gcc link too
-        cmd = ["arm-none-eabi-gcc"] + cflags + linkflags + ["-o", outfile] + infiles
+        cmd = [SDK.arm_tool("gcc")] + cflags + linkflags + ["-o", outfile] + infiles
         logger.debug("Compiling with %s" % cmd)
         subprocess.check_call(cmd)
 
@@ -138,7 +150,7 @@ class Patcher:
         ldfile_out_path = os.path.join(self._scratch_dir, "mods.ld")
         open(ldfile_out_path, "w").write(ldfile_template)
         self._compile(infiles, intermdiatefile, platform, linkflags=["-T" + ldfile_out_path])
-        subprocess.check_call(["arm-none-eabi-objcopy", "-S", "-R", ".stack", "-R", ".priv_bss", "-R", ".bss", "-O", "binary", intermdiatefile, outfile])
+        subprocess.check_call([SDK.arm_tool("objcopy"), "-S", "-R", ".stack", "-R", ".priv_bss", "-R", ".bss", "-O", "binary", intermdiatefile, outfile])
 
     def _patch_bin(self, mod_sources, bin_file_path, platform, new_uuid=None):
         # By the end of this, we should have (in no particular order)
@@ -162,7 +174,7 @@ class Patcher:
             data = bin_file.read(struct.calcsize(format_str))
             return struct.unpack(format_str, data)
         def get_virtual_size(elf_file):
-            readelf_bss_process=subprocess.Popen("arm-none-eabi-readelf -S '%s'"%elf_file,shell=True,stdout=subprocess.PIPE)
+            readelf_bss_process=subprocess.Popen([SDK.arm_tool("readelf"), "-S", elf_file], stdout=subprocess.PIPE)
             readelf_bss_output=readelf_bss_process.communicate()[0]
             last_section_end_addr=0
             for line in readelf_bss_output.splitlines():
@@ -185,7 +197,7 @@ class Patcher:
             raise Exception("Failed to parse ELF sections while calculating the virtual size", readelf_bss_output)
         def get_relocate_entries(elf_file):
             entries=[]
-            readelf_relocs_process=subprocess.Popen(['arm-none-eabi-readelf','-r',elf_file],stdout=subprocess.PIPE)
+            readelf_relocs_process=subprocess.Popen([SDK.arm_tool("readelf"),'-r',elf_file],stdout=subprocess.PIPE)
             readelf_relocs_output=readelf_relocs_process.communicate()[0]
             lines=readelf_relocs_output.splitlines()
             i=0
@@ -201,7 +213,7 @@ class Patcher:
                     else:
                         entries.append(int(lines[i].split(' ')[0],16))
                 i+=1
-            readelf_relocs_process=subprocess.Popen(['arm-none-eabi-readelf','--sections',elf_file],stdout=subprocess.PIPE)
+            readelf_relocs_process=subprocess.Popen([SDK.arm_tool("readelf"),'--sections',elf_file],stdout=subprocess.PIPE)
             readelf_relocs_output=readelf_relocs_process.communicate()[0]
             lines=readelf_relocs_output.splitlines()
             for line in lines:
@@ -217,7 +229,7 @@ class Patcher:
                     break
             return entries
         def get_nm_output(elf_file, raw=False):
-            nm_process=subprocess.Popen(['arm-none-eabi-nm',elf_file],stdout=subprocess.PIPE)
+            nm_process=subprocess.Popen([SDK.arm_tool("nm"),elf_file],stdout=subprocess.PIPE)
             nm_output=nm_process.communicate()[0]
             if not nm_output:
                 raise RuntimeError("Invalid binary")
