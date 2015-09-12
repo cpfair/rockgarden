@@ -91,9 +91,13 @@ class PBWPatcher:
 
         # Prepare the SDK for compilation (we only need to do this once, really)
         if not getattr(PBWPatcher, "_platforms", None):
+            try:
+                sdk_path = os.path.dirname(os.path.dirname(os.path.join(subprocess.check_output(["which", "pebble"]).strip())))
+            except subprocess.CalledProcessError:
+                raise RuntimeError("pebble command-line tool not found in PATH")
             PBWPatcher._platforms = {
-                "aplite": Platform("aplite", "cortex-m3", ["sdk/aplite/include"], "sdk/aplite/lib/libpebble.a", ["-DPBL_PLATFORM_APLITE", "-DPBL_BW"], scratch_dir=self._scratch_dir),
-                "basalt": Platform("basalt", "cortex-m4", ["sdk/basalt/include"], "sdk/basalt/lib/libpebble.a", ["-DPBL_PLATFORM_BASALT", "-DPBL_COLOR", "-D_TIME_H_"], scratch_dir=self._scratch_dir)
+                "aplite": Platform("aplite", "cortex-m3", [os.path.join(sdk_path, "Pebble", "aplite", "include")], os.path.join(sdk_path, "Pebble", "aplite", "lib", "libpebble.a"), ["-DPBL_PLATFORM_APLITE", "-DPBL_BW"], scratch_dir=self._scratch_dir),
+                "basalt": Platform("basalt", "cortex-m4", [os.path.join(sdk_path, "Pebble", "basalt", "include")], os.path.join(sdk_path, "Pebble", "basalt", "lib", "libpebble.a"), ["-DPBL_PLATFORM_BASALT", "-DPBL_COLOR", "-D_TIME_H_"], scratch_dir=self._scratch_dir)
             }
 
     def _compile(self, infiles, outfile, platform, cflags=None, linkflags=None):
@@ -130,7 +134,7 @@ class PBWPatcher:
         self._compile(infiles, outfile, platform, cflags=["-c"])
 
     def _compile_mod_bin(self, infiles, intermdiatefile, outfile, platform, app_addr, bss_addr, bss_section="BSS"):
-        ldfile_template = open("mods_layout.template.ld", "r").read()
+        ldfile_template = open(os.path.join(os.path.dirname(__file__), "mods_layout.template.ld"), "r").read()
         ldfile_template = check_replace(ldfile_template, "@BSS@", hex(bss_addr)) # The end of their BSS, plus what we'll insert
         ldfile_template = check_replace(ldfile_template, "@BSS_SECTION@", bss_section) # Where to put it at all
         ldfile_template = check_replace(ldfile_template, "@APP@", hex(app_addr)) # Where the rest of the app will get mounted
@@ -258,7 +262,8 @@ class PBWPatcher:
             except KeyError:
                 raise RuntimeError("__patch method defined for unknown syscall %s" % method)
 
-        proxy_asm = open("mods_proxy.template.s", "r").read()
+        # This __file__ shenanigans will break if someone ever tries to freeze this module, oh well.
+        proxy_asm = open(os.path.join(os.path.dirname(__file__), "mods_proxy.template.s"), "r").read()
         proxy_asm_path = os.path.join(self._scratch_dir, "mods_proxy.s")
         proxy_switch_body = ["""    ldr r2, =%s @ %s's index\n    cmp r2, r1\n    beq %s""" % (hex(method_idx), method_name, method_name + "__proxy") for method_name, method_idx in proxied_syscalls_map.items()]
         proxy_asm = check_replace(proxy_asm, "@PROXY_SWITCH_BODY@", "\n".join(proxy_switch_body))
