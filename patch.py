@@ -8,10 +8,7 @@ import json
 import re
 import logging
 
-FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
-logging.basicConfig(format=FORMAT)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 STRUCT_VERSION_ADDR=0x8
 LOAD_SIZE_ADDR=0xe
