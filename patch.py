@@ -318,7 +318,6 @@ class Patcher:
         main_reloc_table_size = read_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L")[0]
         logger.info("Rewriting %d relocation entries from main binary by offset %x", main_reloc_table_size, mod_load_size)
         for entry_idx in range(main_reloc_table_size):
-
             target_addr = read_value_at_offset(load_size + entry_idx * 4, "<L")[0]
             target_value = read_value_at_offset(target_addr, "<L")[0]
             logger.debug("Main binary relocation table entry %d points to %x of value %x", entry_idx, target_addr, target_value)
@@ -441,5 +440,5 @@ class Patcher:
 
         with zipfile.ZipFile(pbw_out_path, "w", zipfile.ZIP_DEFLATED) as z:
             for root, dirs, files in os.walk(pbw_tmp_dir):
-                    for file in files:
-                        z.write(os.path.join(root, file), os.path.join(root, file).replace(pbw_tmp_dir, ""))
+                for file in files:
+                    z.write(os.path.join(root, file), os.path.join(root, file).replace(pbw_tmp_dir, ""))
