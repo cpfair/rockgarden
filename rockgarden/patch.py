@@ -1,12 +1,13 @@
+from .stm32_crc import crc32
 import subprocess
 import struct
 import os
 import shutil
-import stm32_crc
 import zipfile
 import json
 import re
 import logging
+import codecs
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def check_replace(obj, find, replace):
     return obj
 
 def unhexify(str):
-    return str.replace(" ", "").decode("hex")
+    return codecs.decode(str.replace(" ", ""), "hex")
 
 
 class SDK:
@@ -35,7 +36,7 @@ class SDK:
     def path(cls):
         if not hasattr(cls, "_path"):
             try:
-                cls._path = os.path.dirname(os.path.dirname(os.path.join(subprocess.check_output(["which", "pebble"]).strip())))
+                cls._path = os.path.dirname(os.path.dirname(os.path.join(subprocess.check_output(["which", "pebble"]).decode("utf-8").strip())))
             except subprocess.CalledProcessError:
                 raise RuntimeError("pebble command-line tool not found in PATH")
         return cls._path
@@ -89,7 +90,7 @@ class Platform:
 
     def _load_syscall_table(self):
         self.syscall_table = {}
-        libpebble_dsm_output = subprocess.check_output([SDK.arm_tool("objdump"), "-d", self.lib])
+        libpebble_dsm_output = subprocess.check_output([SDK.arm_tool("objdump"), "-d", self.lib]).decode("utf-8")
         for call_match in re.finditer(r"<(?P<fcn>[^>]+)>:(?:\n.+){4}8:\s*(?P<idx>[0-9a-f]{8})", libpebble_dsm_output):
             self.syscall_table[call_match.group("fcn")] = int(call_match.group("idx"), 16)
         logger.info("Read %d syscall table entries for %s", len(self.syscall_table.items()), self.name)
@@ -175,7 +176,7 @@ class Patcher:
             return struct.unpack(format_str, data)
         def get_virtual_size(elf_file):
             readelf_bss_process=subprocess.Popen([SDK.arm_tool("readelf"), "-S", elf_file], stdout=subprocess.PIPE)
-            readelf_bss_output=readelf_bss_process.communicate()[0]
+            readelf_bss_output=readelf_bss_process.communicate()[0].decode("utf-8")
             last_section_end_addr=0
             for line in readelf_bss_output.splitlines():
                 if len(line)<10:
@@ -198,7 +199,7 @@ class Patcher:
         def get_relocate_entries(elf_file):
             entries=[]
             readelf_relocs_process=subprocess.Popen([SDK.arm_tool("readelf"),'-r',elf_file],stdout=subprocess.PIPE)
-            readelf_relocs_output=readelf_relocs_process.communicate()[0]
+            readelf_relocs_output=readelf_relocs_process.communicate()[0].decode("utf-8")
             lines=readelf_relocs_output.splitlines()
             i=0
             reading_section=False
@@ -214,7 +215,7 @@ class Patcher:
                         entries.append(int(lines[i].split(' ')[0],16))
                 i+=1
             readelf_relocs_process=subprocess.Popen([SDK.arm_tool("readelf"),'--sections',elf_file],stdout=subprocess.PIPE)
-            readelf_relocs_output=readelf_relocs_process.communicate()[0]
+            readelf_relocs_output=readelf_relocs_process.communicate()[0].decode("utf-8")
             lines=readelf_relocs_output.splitlines()
             for line in lines:
                 if'.got'in line and'.got.plt'not in line:
@@ -233,6 +234,7 @@ class Patcher:
             nm_output=nm_process.communicate()[0]
             if not nm_output:
                 raise RuntimeError("Invalid binary")
+            nm_output = nm_output.decode("utf-8")
             if raw:
                 return nm_output
             nm_output=[line.split()for line in nm_output.splitlines()]
@@ -310,7 +312,7 @@ class Patcher:
         mod_binary = open(mods_final_path, "rb").read()
         assert len(mod_binary) == mod_true_load_size, "Mod binary size changed after relocating BSS/APP sections"
 
-        mod_binary = chr(0) * mod_pre_pad + mod_binary + chr(0) * mod_post_pad
+        mod_binary = b'\0' * mod_pre_pad + mod_binary + b'\0' * mod_post_pad
         mod_binary_nm_output = get_nm_output(mods_final_intermediate_path)
         mod_reloc_entries = [x for x in get_relocate_entries(mods_final_intermediate_path)]
 
@@ -365,7 +367,8 @@ class Patcher:
             bin_file.write(struct.pack('<L',entry))
 
         # Update the header with the new values
-        final_crc = stm32_crc.crc32(mod_binary + main_binary)
+        final_crc = crc32(mod_binary + main_binary)
+        logger.debug("Final CRC: %d" % final_crc)
         write_value_at_offset(CRC_ADDR, "<L", final_crc)
         write_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L", main_reloc_table_size + len(mod_reloc_entries))
         write_value_at_offset(OFFSET_ADDR, "<L", final_entrypoint)
@@ -386,7 +389,7 @@ class Patcher:
         def stm32crc(path):
             with open(path,'r+b')as f:
                 binfile=f.read()
-                return stm32_crc.crc32(binfile)&0xFFFFFFFF
+                return crc32(binfile)&0xFFFFFFFF
 
         manifest_obj = json.loads(open(os.path.join(app_dir, "manifest.json"), "r+").read())
 

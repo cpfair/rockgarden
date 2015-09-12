@@ -8,4 +8,5 @@ setup(name='Rock Garden',
       author='Collin Fair',
       url='https://github.com/cpfair/rockgarden',
       packages=['rockgarden'],
+      install_requires=["six"]
      )
