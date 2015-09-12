@@ -428,7 +428,7 @@ class Patcher:
                 self._update_manifest(os.path.join(pbw_tmp_dir, "basalt"))
 
         if js_sources:
-            logger.info("Appending JS sources")
+            logger.info("Prepending JS sources")
             js_path = os.path.join(pbw_tmp_dir, "pebble-js-app.js")
             existing_js = None
             if os.path.exists(js_path):
