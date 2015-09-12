@@ -8,6 +8,11 @@ Requirement
 
 * Pebble SDK 3.x
 
+Install
+-------
+
+    pip install git+https://github.com/cpfair/rockgarden.git
+
 Usage
 -----
 
