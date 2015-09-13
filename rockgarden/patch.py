@@ -9,6 +9,8 @@ import re
 import logging
 import codecs
 
+__all__ = ["Patcher", "PatchException", "SizeLimitExceededError"]
+
 logger = logging.getLogger(__name__)
 
 STRUCT_VERSION_ADDR=0x8
@@ -47,12 +49,13 @@ class SDK:
 
 
 class Platform:
-    def __init__(self, name, arch, includes, lib, cflags=None, scratch_dir=".pbw-patch-platform-tmp"):
+    def __init__(self, name, arch, includes, lib, max_binary_size, max_memory_size, cflags=None, scratch_dir=".pbw-patch-platform-tmp"):
         self.name = name
         self.arch = arch
         self.includes = includes
         self.lib = lib
-        self.syscall_table = None
+        self.max_binary_size = max_binary_size
+        self.max_memory_size = max_memory_size
         self.cflags = cflags
         self._scratch_dir = scratch_dir
         if not os.path.exists(scratch_dir):
@@ -96,6 +99,14 @@ class Platform:
         logger.info("Read %d syscall table entries for %s", len(self.syscall_table.items()), self.name)
 
 
+class PatchException(Exception):
+    pass
+
+
+class SizeLimitExceededError(PatchException):
+    pass
+
+
 class Patcher:
     def __init__(self, scratch_dir=".pebble-patch-tmp"):
         # Set up the scratch directory
@@ -106,8 +117,20 @@ class Patcher:
         # Prepare the SDK for compilation (we only need to do this once, really)
         if not getattr(Patcher, "_platforms", None):
             Patcher._platforms = {
-                "aplite": Platform("aplite", "cortex-m3", [os.path.join(SDK.path(), "Pebble", "aplite", "include")], os.path.join(SDK.path(), "Pebble", "aplite", "lib", "libpebble.a"), ["-DPBL_PLATFORM_APLITE", "-DPBL_BW"], scratch_dir=self._scratch_dir),
-                "basalt": Platform("basalt", "cortex-m4", [os.path.join(SDK.path(), "Pebble", "basalt", "include")], os.path.join(SDK.path(), "Pebble", "basalt", "lib", "libpebble.a"), ["-DPBL_PLATFORM_BASALT", "-DPBL_COLOR", "-D_TIME_H_"], scratch_dir=self._scratch_dir)
+                "aplite": Platform( "aplite", "cortex-m3",
+                                    includes=[os.path.join(SDK.path(), "Pebble", "aplite", "include")],
+                                    lib=os.path.join(SDK.path(), "Pebble", "aplite", "lib", "libpebble.a"),
+                                    max_memory_size=0x6000,
+                                    max_binary_size=0x10000,
+                                    cflags=["-DPBL_PLATFORM_APLITE", "-DPBL_BW"],
+                                    scratch_dir=self._scratch_dir),
+                "basalt": Platform( "basalt", "cortex-m4",
+                                    includes=[os.path.join(SDK.path(), "Pebble", "basalt", "include")],
+                                    lib=os.path.join(SDK.path(), "Pebble", "basalt", "lib", "libpebble.a"),
+                                    max_memory_size=0x10000,
+                                    max_binary_size=0x10000,
+                                    cflags=["-DPBL_PLATFORM_BASALT", "-DPBL_COLOR", "-D_TIME_H_"],
+                                    scratch_dir=self._scratch_dir)
             }
 
     def _compile(self, infiles, outfile, platform, cflags=None, linkflags=None):
@@ -306,6 +329,8 @@ class Patcher:
         final_virtual_size = virtual_size + mod_virtual_size
         final_load_size = load_size + mod_load_size
         logger.info("Final binary:\n\tLoad size\t%x\n\tVirt size\t%x\n\tEntry pt\t%x\n\tJump tbl\t%x", final_load_size, final_virtual_size, final_entrypoint, final_jump_table)
+        if final_virtual_size > platform.max_memory_size:
+            raise SizeLimitExceededError("App exceeds memory limit of %d bytes, is %d bytes" % (platform.max_memory_size, final_virtual_size))
 
         # Recompile & load result
         self._compile_mod_bin(mod_link_sources, mods_final_intermediate_path, mods_final_path, platform, STRUCT_SIZE_BYTES + mod_pre_pad, virtual_size + mod_load_size)
@@ -365,6 +390,9 @@ class Patcher:
         logger.debug("Additional relocation entries: %s" % mod_reloc_entries)
         for entry in mod_reloc_entries:
             bin_file.write(struct.pack('<L',entry))
+
+        if bin_file.tell() > platform.max_binary_size:
+            raise SizeLimitExceededError("Binary exceeds maximum size of %d bytes, is %d bytes" % (platform.max_binary_size, bin_file.tell()))
 
         # Update the header with the new values
         final_crc = crc32(mod_binary + main_binary)

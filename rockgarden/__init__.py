@@ -1,1 +1,1 @@
-from .patch import Patcher
+from .patch import *
