@@ -8,5 +8,8 @@ setup(name='Rock Garden',
       author='Collin Fair',
       url='https://github.com/cpfair/rockgarden',
       packages=['rockgarden'],
+      package_data={
+          'rockgarden': ['mods_layout.template.ld', 'mods_proxy.template.s'],
+      },
       install_requires=["six"]
      )
