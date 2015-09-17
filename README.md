@@ -23,10 +23,11 @@ Usage
     Patcher().patch_pbw("the-app.pbw",
                         "the-app.patched.pbw",
                         c_sources=["my-patches.c"],
+                        cflags=["-DTHINGS_AND_STUFF"],
                         js_sources=["my-patches.js"],
                         new_uuid=uuid.uuid4())
 
-Some work is performed when you first instantiate the `Patcher`, so hold on to it if you're patching multiple apps. `c_sources`, `js_sources` and `new_uuid` are all optional.
+Some work is performed when you first instantiate the `Patcher`, so hold on to it if you're patching multiple apps. `c_sources`, `js_sources`, `cflags`, and `new_uuid` are all optional.
 
 Creating patches (C)
 --------------------
