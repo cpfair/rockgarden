@@ -49,7 +49,7 @@ class SDK:
 
 
 class Platform:
-    def __init__(self, name, arch, includes, lib, max_binary_size, max_memory_size, cflags=None, scratch_dir=".pbw-patch-platform-tmp"):
+    def __init__(self, name, arch, includes, lib, max_binary_size, max_memory_size, cflags=[], scratch_dir=".pbw-patch-platform-tmp"):
         self.name = name
         self.arch = arch
         self.includes = includes
@@ -163,17 +163,18 @@ class Patcher:
         logger.debug("Compiling with %s" % cmd)
         subprocess.check_call(cmd)
 
-    def _compile_mod_user_object(self, infiles, outfile, platform, cflags=[]):
-        self._compile(infiles, outfile, platform, cflags=["-c"] + cflags)
+    def _compile_mod_user_object(self, infiles, outfile, platform, cflags=None):
+        self._compile(infiles, outfile, platform, cflags=["-c"] + (cflags if cflags else[]))
 
-    def _compile_mod_bin(self, infiles, intermdiatefile, outfile, platform, app_addr, bss_addr, bss_section="BSS", cflags=[]):
+    def _compile_mod_bin(self, infiles, intermdiatefile, outfile, platform, app_addr, bss_addr, bss_section="BSS", cflags=None):
         ldfile_template = open(os.path.join(os.path.dirname(__file__), "mods_layout.template.ld"), "r").read()
         ldfile_template = check_replace(ldfile_template, "@BSS@", hex(bss_addr)) # The end of their BSS, plus what we'll insert
         ldfile_template = check_replace(ldfile_template, "@BSS_SECTION@", bss_section) # Where to put it at all
         ldfile_template = check_replace(ldfile_template, "@APP@", hex(app_addr)) # Where the rest of the app will get mounted
         ldfile_out_path = os.path.join(self._scratch_dir, "mods.ld")
+        map_out_path = os.path.join(self._scratch_dir, "mods.map")
         open(ldfile_out_path, "w").write(ldfile_template)
-        self._compile(infiles, intermdiatefile, platform, linkflags=["-T" + ldfile_out_path], cflags=cflags)
+        self._compile(infiles, intermdiatefile, platform, linkflags=["-T" + ldfile_out_path, "-Map,%s,--emit-relocs" % map_out_path], cflags=cflags)
         subprocess.check_call([SDK.arm_tool("objcopy"), "-S", "-R", ".stack", "-R", ".priv_bss", "-R", ".bss", "-O", "binary", intermdiatefile, outfile])
 
     def _patch_bin(self, mod_sources, bin_file_path, platform, new_uuid=None, cflags=None):
@@ -310,7 +311,7 @@ class Patcher:
         mod_link_sources = [mod_user_object_path, proxy_asm_path]
         mods_final_intermediate_path = os.path.join(self._scratch_dir, "mods_final.o")
         mods_final_path = os.path.join(self._scratch_dir, "mods_final.bin")
-        self._compile_mod_bin(mod_link_sources, mods_final_intermediate_path, mods_final_path, platform, 0x00, 0x00, "APP", cflags=cflags)
+        self._compile_mod_bin(mod_link_sources, mods_final_intermediate_path, mods_final_path, platform, app_addr=0x00, bss_addr=0x00, bss_section="APP", cflags=cflags)
 
         # Then, Recompile the mods with the BSS set to the end of the virtual_size (i.e. the eventual end of the main app's bss) now that we know it
         # This is a bit sketch since, in order to know the final virtual_size, we need to know the size of the mod's code and BSS
@@ -333,7 +334,7 @@ class Patcher:
             raise SizeLimitExceededError("App exceeds memory limit of %d bytes, is %d bytes" % (platform.max_memory_size, final_virtual_size))
 
         # Recompile & load result
-        self._compile_mod_bin(mod_link_sources, mods_final_intermediate_path, mods_final_path, platform, STRUCT_SIZE_BYTES + mod_pre_pad, virtual_size + mod_load_size, cflags=cflags)
+        self._compile_mod_bin(mod_link_sources, mods_final_intermediate_path, mods_final_path, platform, app_addr=STRUCT_SIZE_BYTES + mod_pre_pad, bss_addr=virtual_size + mod_load_size, cflags=cflags)
         mod_binary = open(mods_final_path, "rb").read()
         assert len(mod_binary) == mod_true_load_size, "Mod binary size changed after relocating BSS/APP sections"
 
