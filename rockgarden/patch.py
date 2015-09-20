@@ -433,7 +433,7 @@ class Patcher:
         appinfo_obj["uuid"] = str(new_uuid)
         open(os.path.join(app_dir, "appinfo.json"), "w").write(json.dumps(appinfo_obj))
 
-    def patch_pbw(self, pbw_path, pbw_out_path, c_sources=None, js_sources=None, cflags=None, new_uuid=None):
+    def patch_pbw(self, pbw_path, pbw_out_path, c_sources=None, js_sources=None, cflags=None, new_uuid=None, ensure_basalt=False):
         pbw_tmp_dir = os.path.join(self._scratch_dir, "pbw")
         if os.path.exists(pbw_tmp_dir):
             shutil.rmtree(pbw_tmp_dir)
@@ -446,6 +446,18 @@ class Patcher:
             self._update_appinfo(pbw_tmp_dir, new_uuid)
 
         if c_sources:
+            # If they want a basalt binary, give them a basalt binary (that's really an Aplite binary)
+            # We will probably end up using 3.x features in apps with a pruported SDK version of 1(??)/2 - but I don't think the firmware cares
+            # (syscall changes are achieved by creating entirely new syscall indices, not checking the ver #)
+            if ensure_basalt and not os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
+                def copy_to_basalt(fn):
+                    if os.path.exists(os.path.join(pbw_tmp_dir, fn)):
+                        shutil.copy2(os.path.join(pbw_tmp_dir, fn), os.path.join(pbw_tmp_dir, "basalt", fn))
+                os.mkdir(os.path.join(pbw_tmp_dir, "basalt"))
+                copy_to_basalt("app_resources.pbpack")
+                copy_to_basalt("manifest.json")
+                copy_to_basalt("pebble-app.bin")
+
             if os.path.join(pbw_tmp_dir, "pebble-app.bin"):
                 logger.info("Patching Aplite binary")
                 self._patch_bin(c_sources, os.path.join(pbw_tmp_dir, "pebble-app.bin"), Patcher._platforms["aplite"], new_uuid, cflags=cflags)

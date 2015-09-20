@@ -25,9 +25,10 @@ Usage
                         c_sources=["my-patches.c"],
                         cflags=["-DTHINGS_AND_STUFF"],
                         js_sources=["my-patches.js"],
-                        new_uuid=uuid.uuid4())
+                        new_uuid=uuid.uuid4(),
+                        ensure_basalt=True)
 
-Some work is performed when you first instantiate the `Patcher`, so hold on to it if you're patching multiple apps. `c_sources`, `js_sources`, `cflags`, and `new_uuid` are all optional.
+Some work is performed when you first instantiate the `Patcher`, so hold on to it if you're patching multiple apps. `c_sources`, `js_sources`, `cflags`, `new_uuid`, and `ensure_basalt` are all optional. Setting `ensure_basalt` will "upgrade" Aplite-only apps by copying their Aplite binary and patching it as if it were Basalt.
 
 Creating patches (C)
 --------------------
