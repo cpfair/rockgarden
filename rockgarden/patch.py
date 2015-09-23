@@ -191,6 +191,8 @@ class Patcher:
         # - increment the header's pointer to the main app's jump table addr placeholder
 
         # The following functions are stolen from SDK:
+        class EmptyBinaryError(Exception):
+            pass
         def write_value_at_offset(offset, format_str, value):
             bin_file.seek(offset)
             bin_file.write(struct.pack(format_str, value))
@@ -257,7 +259,7 @@ class Patcher:
             nm_process=subprocess.Popen([SDK.arm_tool("nm"),elf_file],stdout=subprocess.PIPE)
             nm_output=nm_process.communicate()[0]
             if not nm_output:
-                raise RuntimeError("Invalid binary")
+                raise EmptyBinaryError()
             nm_output = nm_output.decode("utf-8")
             if raw:
                 return nm_output
@@ -284,12 +286,26 @@ class Patcher:
         jump_table = read_value_at_offset(JUMP_TABLE_ADDR, "<L")[0]
         logger.info("Main binary:\n\tLoad size\t%x\n\tVirt size\t%x\n\tEntry pt\t%x\n\tJump tbl\t%x", load_size, virtual_size, main_entrypoint, jump_table)
 
+        # We rewrite the UUID here since, if the patch binary is empty, we'll bail quite soon after this point
+        if new_uuid:
+            bin_file.seek(UUID_ADDR)
+            bin_file.write(new_uuid.bytes)
+
         # Prep the mods by compiling the user code so we can see which functions they wish to patch
         mod_user_object_path = os.path.join(self._scratch_dir, "mods_user.o")
         self._compile_mod_user_object(mod_sources, mod_user_object_path, platform, cflags=cflags)
 
         # Redefining a syscall fcn with __patch appended to the name will cause it to be overridden in the main app
-        proxied_syscalls = re.findall(r"(\w+)__patch", get_nm_output(mod_user_object_path, raw=True))
+        try:
+            proxied_syscalls = re.findall(r"(\w+)__patch", get_nm_output(mod_user_object_path, raw=True))
+        except EmptyBinaryError:
+            logger.warning("Patch binary has no exported symbols - nothing to do")
+            return # There is nothing to patch - nothing beyond this point matters
+
+        if not proxied_syscalls:
+            logger.warning("Patch binary exports no __patch methods - nothing to do")
+            return
+
         proxied_syscalls_map = {}
         for method in proxied_syscalls:
             try:
@@ -404,10 +420,6 @@ class Patcher:
         write_value_at_offset(VIRTUAL_SIZE_ADDR, "<H", final_virtual_size)
         write_value_at_offset(LOAD_SIZE_ADDR, "<H", final_load_size)
         write_value_at_offset(JUMP_TABLE_ADDR, "<L", final_jump_table)
-        # If requested, rewrite UUID
-        if new_uuid:
-            bin_file.seek(UUID_ADDR)
-            bin_file.write(new_uuid.bytes)
 
         assert final_entrypoint % 4 == 0, "Main entrypoint not byte-aligned"
         assert mod_syscall_proxy_addr % 4 == 0, "Mod code not byte-aligned, falls at %x" % (mod_syscall_proxy_addr + STRUCT_SIZE_BYTES)
