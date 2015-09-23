@@ -335,7 +335,7 @@ class Patcher:
         # ...so I hope the size doesn't somehow change when we move the BSS (it shouldn't, it looks like all BSS stuff is ending up in the GOT)
         mod_true_load_size = os.stat(mods_final_path).st_size # Before padding
         mod_pre_pad = 2 # This breaks everything
-        mod_post_pad = 2 if (mod_true_load_size + mod_pre_pad) % 4 != 0 else 0  # ...this fixes it? We need to word-align the mod start, and the main app's entrypoint, for ARM EABI
+        mod_post_pad = (4 - (mod_true_load_size + mod_pre_pad) % 4) if (mod_true_load_size + mod_pre_pad) % 4 != 0 else 0  # ...this fixes it? We need to word-align the mod start, and the main app's entrypoint, for ARM EABI
         mod_load_size = mod_true_load_size + mod_pre_pad + mod_post_pad
         mod_virtual_size = get_virtual_size(mods_final_intermediate_path) + mod_pre_pad + mod_post_pad
         logger.info("Patch binary:\n\tLoad size\t%x\n\tVirt size\t%x\n\tPrec Pad\t%x\n\tPost pad\t%x", mod_load_size, mod_virtual_size, mod_pre_pad, mod_post_pad)
