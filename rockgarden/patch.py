@@ -421,8 +421,8 @@ class Patcher:
         write_value_at_offset(LOAD_SIZE_ADDR, "<H", final_load_size)
         write_value_at_offset(JUMP_TABLE_ADDR, "<L", final_jump_table)
 
-        assert final_entrypoint % 4 == 0, "Main entrypoint not byte-aligned"
-        assert mod_syscall_proxy_addr % 4 == 0, "Mod code not byte-aligned, falls at %x" % (mod_syscall_proxy_addr + STRUCT_SIZE_BYTES)
+        assert final_entrypoint % 4 == 0, "Main entrypoint not word-aligned"
+        assert mod_syscall_proxy_addr % 4 == 0, "Mod code not word-aligned, falls at %x" % (mod_syscall_proxy_addr + STRUCT_SIZE_BYTES)
         # assert (mod_binary.index(unhexify("044a8a42")) + STRUCT_SIZE_BYTES) == mod_syscall_proxy_addr, "Proxy address reality mismatch"
 
     def _update_manifest(self, app_dir):
