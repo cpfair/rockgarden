@@ -283,9 +283,11 @@ class Patcher:
         # Open the binary
         # I guess I could do this all in memory but oh well
         bin_file = open(bin_file_path, "r+b")
+        bin_contents = bin_file.read()
+        bin_file.seek(0)
 
         # Make sure we know what we're dealing with
-        assert bin_file.read(8) == b'PBLAPP\0\0', "Invalid main binary header"
+        assert bin_contents[:8] == b'PBLAPP\0\0', "Invalid main binary header"
         assert read_value_at_offset(STRUCT_VERSION_ADDR, "<H")[0] == 16, "Unknown main binary header format"
         # Figure out the end of the .data+.text section (immediately before relocs) in the main app
         load_size = read_value_at_offset(LOAD_SIZE_ADDR, "<H")[0]
@@ -322,14 +324,37 @@ class Patcher:
             except KeyError:
                 raise RuntimeError("__patch method defined for unknown syscall %s" % method)
 
+        # We know which syscalls they want to patch - but which does the app actually use?
+        # (we only want to include the intersection, for obvious reasons)
+        # So, we scan the existing executable for the syscall stubs
+        # Which are of form...
+        # 00000234 <window_stack_get_top_window>:
+        #  234:   b40f        push    {r0, r1, r2, r3}
+        #  236:   4901        ldr r1, [pc, #4]    ; (23c <window_stack_get_top_window+0x8>)
+        #         @ The header for this opcode is just 0b11110 - so we don't attempt to match against it
+        #  238:   f7ff bf3c   b.w b4 <jump_to_pbl_function>
+        #  23c:   00000470    .word   0x00000470 @ This is the syscall index
+        # It's not super critical if we "discover" some non-existent syscalls, but we should never under-report calls
+        syscall_stub_pattern = unhexify("0fb4 0149")
+        called_syscall_indices = set()
+        for stub_match in re.finditer(syscall_stub_pattern, bin_contents):
+            called_syscall_idx = read_value_at_offset(stub_match.end() + 4, "<L")[0]
+            called_syscall_indices.add(called_syscall_idx)
+
         # This __file__ shenanigans will break if someone ever tries to freeze this module, oh well.
+        # Either way, we auto-generate some assembly to handle incoming calls from the main app, proxying them to our __patch methods
         proxy_asm = open(os.path.join(os.path.dirname(__file__), "mods_proxy.template.s"), "r").read()
         proxy_asm_path = os.path.join(self._scratch_dir, "mods_proxy.s")
         proxy_switch_body = []
-        # Rather than LDR a fresh index in every instance, we try to use add with an immediate value if possible
+        proxy_fcns_body = []
+        # Rather than LDR a fresh index in every instance, we try to use add with an immediate value if possible in the switch body
         last_idx = min(proxied_syscalls_map.values())
         written_base = False
         for method_name, method_idx in sorted(proxied_syscalls_map.items(), key=lambda tup: tup[1]):
+            if method_idx not in called_syscall_indices:
+                logger.debug("Discarding %s (%d) - not called by main app" % (method_name, method_idx))
+                continue
+            # First, we generate the switch that will branch to our proxy function
             if method_idx - last_idx > 255:
                 written_base = False
                 last_idx = method_idx
@@ -340,11 +365,11 @@ class Patcher:
                 proxy_switch_body.append("    add r2, r2, #%s" % hex(method_idx - last_idx))
             last_idx = method_idx
             proxy_switch_body.append("    cmp r2, r1\n    beq %s @ syscall index %d" % (method_name + "__proxy", method_idx))
+            # Then, the proxy function itself
+            proxy_fcns_body.append(".type %s function\n%s:\n    pop {r0, r1, r2, r3}\n    b %s" % (method_name + "__proxy", method_name + "__proxy", method_name + "__patch"))
         proxy_asm = check_replace(proxy_asm, "@PROXY_SWITCH_BODY@", "\n".join(proxy_switch_body))
-        proxy_fcns_body = [""".type %s function\n%s:\n    pop {r0, r1, r2, r3}\n    b %s""" % (method_name + "__proxy", method_name + "__proxy", method_name + "__patch") for method_name in proxied_syscalls_map.keys()]
         proxy_asm = check_replace(proxy_asm, "@PROXY_FCNS_BODY@", "\n".join(proxy_fcns_body))
         open(proxy_asm_path, "w").write(proxy_asm)
-
 
         # Compile the final binary once, since we need to know its dimensions to set the BSS section correctly the second time around
         mod_link_sources = [mod_user_object_path, proxy_asm_path]
