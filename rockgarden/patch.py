@@ -325,7 +325,21 @@ class Patcher:
         # This __file__ shenanigans will break if someone ever tries to freeze this module, oh well.
         proxy_asm = open(os.path.join(os.path.dirname(__file__), "mods_proxy.template.s"), "r").read()
         proxy_asm_path = os.path.join(self._scratch_dir, "mods_proxy.s")
-        proxy_switch_body = ["""    ldr r2, =%s @ %s's index\n    cmp r2, r1\n    beq %s""" % (hex(method_idx), method_name, method_name + "__proxy") for method_name, method_idx in proxied_syscalls_map.items()]
+        proxy_switch_body = []
+        # Rather than LDR a fresh index in every instance, we try to use add with an immediate value if possible
+        last_idx = min(proxied_syscalls_map.values())
+        written_base = False
+        for method_name, method_idx in sorted(proxied_syscalls_map.items(), key=lambda tup: tup[1]):
+            if method_idx - last_idx > 255:
+                written_base = False
+                last_idx = method_idx
+            if not written_base:
+                written_base = True
+                proxy_switch_body.append("    ldr r2, =%s" % hex(last_idx))
+            if method_idx - last_idx:
+                proxy_switch_body.append("    add r2, r2, #%s" % hex(method_idx - last_idx))
+            last_idx = method_idx
+            proxy_switch_body.append("    cmp r2, r1\n    beq %s @ syscall index %d" % (method_name + "__proxy", method_idx))
         proxy_asm = check_replace(proxy_asm, "@PROXY_SWITCH_BODY@", "\n".join(proxy_switch_body))
         proxy_fcns_body = [""".type %s function\n%s:\n    pop {r0, r1, r2, r3}\n    b %s""" % (method_name + "__proxy", method_name + "__proxy", method_name + "__patch") for method_name in proxied_syscalls_map.keys()]
         proxy_asm = check_replace(proxy_asm, "@PROXY_FCNS_BODY@", "\n".join(proxy_fcns_body))
