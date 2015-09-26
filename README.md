@@ -6,7 +6,7 @@ Lets you patch Pebble apps. You can override C syscalls, add new Javascript, and
 Requirement
 -----------
 
-* Pebble SDK 3.x
+* Pebble SDK 3.x (with the `pebble` tool in your PATH, or environment variable `PBL_SDK_DIR` set to the root of the SDK)
 
 Install
 -------
