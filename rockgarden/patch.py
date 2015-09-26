@@ -9,7 +9,7 @@ import re
 import logging
 import codecs
 
-__all__ = ["Patcher", "PatchException", "SizeLimitExceededError"]
+__all__ = ["Patcher", "PatchException", "SizeLimitExceededError", "CompilationError"]
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,10 @@ class SizeLimitExceededError(PatchException):
     pass
 
 
+class CompilationError(PatchException):
+    pass
+
+
 class Patcher:
     def __init__(self, scratch_dir=".pebble-patch-tmp"):
         # Set up the scratch directory
@@ -163,7 +167,10 @@ class Patcher:
         linkflags = ["-Wl,%s" % flag for flag in linkflags] # Since we're letting gcc link too
         cmd = [SDK.arm_tool("gcc")] + cflags + linkflags + ["-o", outfile] + infiles
         logger.debug("Compiling with %s" % cmd)
-        subprocess.check_call(cmd)
+        compile_proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        result, _ = compile_proc.communicate()
+        if compile_proc.poll():
+            raise CompilationError("Compilation failed:\n%s" % result)
 
     def _compile_mod_user_object(self, infiles, outfile, platform, cflags=None):
         self._compile(infiles, outfile, platform, cflags=["-c"] + (cflags if cflags else[]))
