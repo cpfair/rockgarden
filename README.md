@@ -39,6 +39,10 @@ You write C patches pretty much the same way you write C Pebble apps; the full P
 
 Instead, you get things to happen (or not happen, as the case may be) by overriding Pebble SDK calls. You do this by defining a function `<sdk_function>__patch` with the exact same signature as the SDK call it's overriding. Within this function, you can do whatever you want, including calling the original SDK function by its usual name.
 
+**Caveat:** As the Pebble SDK is updated, some SDK functions are replaced with new versions that use a different signature, expect different struct formats, etc. *but use the same name*. The deprecated functions remain in the firmware and in `libpebble.a`, renamed as `__deprecated`, `_legacy2`, or similar. Because of this, if you patch `menu_layer_create` (for example), calls to `menu_layer_legacy2_create` will be unaffected. To address this, you could additionally define `menu_layer_legacy2_create__patch` and call through to `menu_layer_legacy2_create` as you see fit.
+
+The system automatically discards `__patch` functions where the corresponding syscall is not present in the target app.
+
 For instance, want to turn the backlight on when the app starts?
 
     #include <pebble.h>
