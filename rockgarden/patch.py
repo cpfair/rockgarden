@@ -22,6 +22,10 @@ VIRTUAL_SIZE_ADDR=0x80
 STRUCT_SIZE_BYTES=0x82
 JUMP_TABLE_ADDR=0x5c
 UUID_ADDR=0x68
+FLAGS_ADDR = 0x60
+
+APP_INFO_WATCH_FACE = (1 << 0)
+APP_INFO_ALLOW_JS = (1 << 3)
 
 def check_replace(obj, find, replace):
     old_obj = obj
@@ -186,7 +190,7 @@ class Patcher:
         self._compile(infiles, intermdiatefile, platform, linkflags=["-T" + ldfile_out_path, "-Map,%s,--emit-relocs" % map_out_path], cflags=cflags)
         subprocess.check_call([SDK.arm_tool("objcopy"), "-S", "-R", ".stack", "-R", ".priv_bss", "-R", ".bss", "-O", "binary", intermdiatefile, outfile])
 
-    def _patch_bin(self, mod_sources, bin_file_path, platform, new_uuid=None, cflags=None):
+    def _patch_bin(self, mod_sources, bin_file_path, platform, new_uuid=None, new_app_type=None, enable_js=None, cflags=None):
         # By the end of this, we should have (in no particular order)
         # - compiled the mod binary with the BSS located at the end of the main app's .bss
         # - have inserted the mod binary between the app header and the main body of the app code
@@ -297,10 +301,24 @@ class Patcher:
         jump_table = read_value_at_offset(JUMP_TABLE_ADDR, "<L")[0]
         logger.info("Main binary:\n\tLoad size\t%x\n\tVirt size\t%x\n\tEntry pt\t%x\n\tJump tbl\t%x", load_size, virtual_size, main_entrypoint, jump_table)
 
-        # We rewrite the UUID here since, if the patch binary is empty, we'll bail quite soon after this point
+        # We rewrite the UUID, etc. here since, if the patch binary is empty, we'll bail quite soon after this point
         if new_uuid:
             bin_file.seek(UUID_ADDR)
             bin_file.write(new_uuid.bytes)
+
+        app_flags = read_value_at_offset(FLAGS_ADDR, "<L")[0]
+        if enable_js is not None:
+            if enable_js:
+                app_flags = app_flags | APP_INFO_ALLOW_JS
+            else:
+                app_flags = app_flags & ~APP_INFO_ALLOW_JS
+
+        if new_app_type is not None:
+            if new_app_type == "watchface":
+                app_flags = app_flags | APP_INFO_WATCH_FACE
+            else:
+                app_flags = app_flags & ~APP_INFO_WATCH_FACE
+        write_value_at_offset(FLAGS_ADDR, "<L", app_flags)
 
         # Prep the mods by compiling the user code so we can see which functions they wish to patch
         mod_user_object_path = os.path.join(self._scratch_dir, "mods_user.o")
@@ -486,23 +504,30 @@ class Patcher:
         manifest_obj["application"]["size"] = os.stat(os.path.join(app_dir, "pebble-app.bin")).st_size
         open(os.path.join(app_dir, "manifest.json"), "w").write(json.dumps(manifest_obj))
 
-    def _update_appinfo(self, app_dir, new_uuid):
+    def _update_appinfo(self, app_dir, new_uuid=None, new_app_type=None):
         appinfo_obj = json.loads(open(os.path.join(app_dir, "appinfo.json"), "r+").read())
 
-        appinfo_obj["uuid"] = str(new_uuid)
+        if new_uuid:
+            appinfo_obj["uuid"] = str(new_uuid)
+
+        if new_app_type:
+            appinfo_obj.setdefault("watchapp", {})["watchface"] = new_app_type == "watchface"
+
         open(os.path.join(app_dir, "appinfo.json"), "w").write(json.dumps(appinfo_obj))
 
-    def patch_pbw(self, pbw_path, pbw_out_path, c_sources=None, js_sources=None, cflags=None, new_uuid=None, ensure_platforms=()):
+    def patch_pbw(self, pbw_path, pbw_out_path, c_sources=None, js_sources=None, cflags=None, new_uuid=None, new_app_type=None, ensure_platforms=()):
         pbw_tmp_dir = os.path.join(self._scratch_dir, "pbw")
         if os.path.exists(pbw_tmp_dir):
             shutil.rmtree(pbw_tmp_dir)
         os.mkdir(pbw_tmp_dir)
 
+        assert new_app_type in (None, "watchapp", "watchface"), "new_app_type must be one of None, watchapp, or watchface"
+
         with zipfile.ZipFile(pbw_path, "r") as z:
             z.extractall(pbw_tmp_dir)
 
-        if new_uuid:
-            self._update_appinfo(pbw_tmp_dir, new_uuid)
+        if new_uuid or new_app_type:
+            self._update_appinfo(pbw_tmp_dir, new_uuid, new_app_type)
 
         if c_sources:
             # If they want a basalt binary, give them a basalt binary (that's really an Aplite binary)
@@ -519,14 +544,14 @@ class Patcher:
 
             if os.path.join(pbw_tmp_dir, "pebble-app.bin"):
                 logger.info("Patching Aplite binary")
-                self._patch_bin(c_sources, os.path.join(pbw_tmp_dir, "pebble-app.bin"), Patcher._platforms["aplite"], new_uuid, cflags=cflags)
+                self._patch_bin(c_sources, os.path.join(pbw_tmp_dir, "pebble-app.bin"), Patcher._platforms["aplite"], new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
                 # Update CRC of binary
                 self._update_manifest(pbw_tmp_dir)
 
             if os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
                 logger.info("Patching Basalt binary")
                 # Do the same for basalt
-                self._patch_bin(c_sources, os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), Patcher._platforms["basalt"], new_uuid, cflags=cflags)
+                self._patch_bin(c_sources, os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), Patcher._platforms["basalt"], new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
                 self._update_manifest(os.path.join(pbw_tmp_dir, "basalt"))
 
         if js_sources:

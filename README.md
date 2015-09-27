@@ -26,9 +26,10 @@ Usage
                         cflags=["-DTHINGS_AND_STUFF"],
                         js_sources=["my-patches.js"],
                         new_uuid=uuid.uuid4(),
+                        new_app_type="watchface",
                         ensure_platforms=["aplite", "basalt"])
 
-Some work is performed when you first instantiate the `Patcher`, so hold on to it if you're patching multiple apps. `c_sources`, `js_sources`, `cflags`, `new_uuid`, and `ensure_platforms` are all optional.
+Some work is performed when you first instantiate the `Patcher`, so hold on to it if you're patching multiple apps. `c_sources`, `js_sources`, `cflags`, `new_uuid`, `new_app_type`, and `ensure_platforms` are all optional.
 
 Including "basalt" in `ensure_platforms` will "upgrade" Aplite-only apps by copying their Aplite binary and patching it as if it were Basalt. `ensure_platform` currently has no effect on Basalt-only apps, or apps with both executables.
 
