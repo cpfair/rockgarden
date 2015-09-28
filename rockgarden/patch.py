@@ -530,19 +530,19 @@ class Patcher:
             self._update_appinfo(pbw_tmp_dir, new_uuid, new_app_type)
 
         if c_sources:
-            # If they want a basalt binary, give them a basalt binary (that's really an Aplite binary)
-            # We will probably end up using 3.x features in apps with a pruported SDK version of 1(??)/2 - but I don't think the firmware cares
-            # (syscall changes are achieved by creating entirely new syscall indices, not checking the ver #)
-            if "basalt" in ensure_platforms and not os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
-                def copy_to_basalt(fn):
-                    if os.path.exists(os.path.join(pbw_tmp_dir, fn)):
-                        shutil.copy2(os.path.join(pbw_tmp_dir, fn), os.path.join(pbw_tmp_dir, "basalt", fn))
-                os.mkdir(os.path.join(pbw_tmp_dir, "basalt"))
-                copy_to_basalt("app_resources.pbpack")
-                copy_to_basalt("manifest.json")
-                copy_to_basalt("pebble-app.bin")
+            if os.path.exists(os.path.join(pbw_tmp_dir, "pebble-app.bin")):
+                # If they want a basalt binary, give them a basalt binary (that's really an Aplite binary)
+                # We will probably end up using 3.x features in apps with a pruported SDK version of 1(??)/2 - but I don't think the firmware cares
+                # (syscall changes are achieved by creating entirely new syscall indices, not checking the ver #)
+                if "basalt" in ensure_platforms and not os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
+                    def copy_to_basalt(fn):
+                        if os.path.exists(os.path.join(pbw_tmp_dir, fn)):
+                            shutil.copy2(os.path.join(pbw_tmp_dir, fn), os.path.join(pbw_tmp_dir, "basalt", fn))
+                    os.mkdir(os.path.join(pbw_tmp_dir, "basalt"))
+                    copy_to_basalt("app_resources.pbpack")
+                    copy_to_basalt("manifest.json")
+                    copy_to_basalt("pebble-app.bin")
 
-            if os.path.join(pbw_tmp_dir, "pebble-app.bin"):
                 logger.info("Patching Aplite binary")
                 self._patch_bin(c_sources, os.path.join(pbw_tmp_dir, "pebble-app.bin"), Patcher._platforms["aplite"], new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
                 # Update CRC of binary
