@@ -457,10 +457,15 @@ class Patcher:
         logger.info("Patching main binary jump routine at %x to use proxy at %x", jump_to_pbl_function_addr, mod_syscall_proxy_addr)
 
         # update the mod's binary with the (eventual) address of the jump table placeholder
-        mod_jump_table_ptr_addr = mod_binary.index(unhexify("a8a8a8a8"))
-        relocated_main_jump_table = jump_table + mod_load_size
-        logger.info("Writing patch binary's jump indirection value at %x to %x", mod_jump_table_ptr_addr, relocated_main_jump_table)
-        mod_binary = check_replace(mod_binary, unhexify("a8a8a8a8"), struct.pack("<L", relocated_main_jump_table))
+        mod_jump_table_ptr_addr = None
+        try:
+            mod_jump_table_ptr_addr = mod_binary.index(unhexify("a8a8a8a8"))
+        except ValueError:
+            logger.info("Patch binary does not make any SDK calls, no need to patch its jump indirection value")
+        else:
+            relocated_main_jump_table = jump_table + mod_load_size
+            logger.info("Writing patch binary's jump indirection value at %x to %x", mod_jump_table_ptr_addr, relocated_main_jump_table)
+            mod_binary = check_replace(mod_binary, unhexify("a8a8a8a8"), struct.pack("<L", relocated_main_jump_table))
 
         bin_file.seek(STRUCT_SIZE_BYTES)
         # Insert the mod binary
@@ -471,7 +476,8 @@ class Patcher:
         # and, finally, ours (plus the header since we don't compile that in)
         initial_added_reloc_entries_count = len(mod_reloc_entries)
         mod_reloc_entries.append(STRUCT_SIZE_BYTES + mod_load_size + jump_to_pbl_function_addr + 8) # For their jump to our proxy
-        mod_reloc_entries.append(STRUCT_SIZE_BYTES + mod_jump_table_ptr_addr) # For our jump table ptr thing
+        if mod_jump_table_ptr_addr:
+            mod_reloc_entries.append(STRUCT_SIZE_BYTES + mod_jump_table_ptr_addr) # For our jump table ptr thing
         logger.info("Appending %d additional relocation entries, %d from patch binary", len(mod_reloc_entries), initial_added_reloc_entries_count)
         logger.debug("Additional relocation entries: %s" % mod_reloc_entries)
         for entry in mod_reloc_entries:
