@@ -385,6 +385,9 @@ class Patcher:
             proxy_switch_body.append("    cmp r2, r1\n    beq %s @ syscall index %d" % (method_name + "__proxy", method_idx))
             # Then, the proxy function itself
             proxy_fcns_body.append(".type %s function\n%s:\n    pop {r0, r1, r2, r3}\n    b %s" % (method_name + "__proxy", method_name + "__proxy", method_name + "__patch"))
+        if not proxy_fcns_body:
+            logger.warning("All __patch functions in patch binary discarded - nothing to do")
+            return
         proxy_asm = check_replace(proxy_asm, "@PROXY_SWITCH_BODY@", "\n".join(proxy_switch_body))
         proxy_asm = check_replace(proxy_asm, "@PROXY_FCNS_BODY@", "\n".join(proxy_fcns_body))
         open(proxy_asm_path, "w").write(proxy_asm)
