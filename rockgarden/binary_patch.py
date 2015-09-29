@@ -115,6 +115,7 @@ class BinaryPatcher:
         subprocess.check_call([SDK.arm_tool("objcopy"), "-S", "-R", ".stack", "-R", ".priv_bss", "-R", ".bss", "-O", "binary", intermdiatefile, outfile])
 
     def _get_nm_output(self, elf_file, raw=False):
+        # This is from the SDK
         nm_process=subprocess.Popen([SDK.arm_tool("nm"),elf_file],stdout=subprocess.PIPE)
         nm_output=nm_process.communicate()[0]
         if not nm_output:
@@ -126,12 +127,13 @@ class BinaryPatcher:
         return nm_output
 
     def _verify_header(self):
-        # Make sure we know what we're dealing with
+        # Make sure we know what we're dealing with - not that I think the executable header has ever changed
         self._bin_file.seek(0)
         assert self._bin_file.read(8) == b'PBLAPP\0\0', "Invalid main binary header"
         assert self._read_value_at_offset(STRUCT_VERSION_ADDR, "<H")[0] == 16, "Unknown main binary header format"
 
     def _update_header_extraneous_metadata(self, new_uuid=None, enable_js=None, new_app_type=None):
+        # This is all the metadata that generally doesn't matter to actual execution
         if new_uuid:
             self._bin_file.seek(UUID_ADDR)
             self._bin_file.write(new_uuid.bytes)
@@ -152,6 +154,7 @@ class BinaryPatcher:
 
     def _inspect_mod_proxied_syscalls(self, user_object):
         # Redefining a syscall fcn with __patch appended to the name will cause it to be overridden in the main app
+        # This is where we scan for those __patch functions
         try:
             proxied_syscalls_list = re.findall(r"(\w+)__patch", self._get_nm_output(user_object, raw=True))
         except BinaryPatcher.EmptyBinaryError:
@@ -167,7 +170,8 @@ class BinaryPatcher:
         return proxied_syscalls_map
 
     def _inspect_called_syscall_indices(self):
-        # We scan the existing executable for the syscall stubs
+        # Unlike _inspect_mod_proxied_syscalls, we can't just dump the symbols from the stripped binary
+        # Instead, we scan for the syscall stubs in assembly
         # Which are of form...
         # 00000234 <window_stack_get_top_window>:
         #  234:   b40f        push    {r0, r1, r2, r3}
@@ -186,16 +190,17 @@ class BinaryPatcher:
             called_syscall_indices.add(called_syscall_idx)
         return called_syscall_indices
 
-    def _generate_proxy_asm(self, syscalls_map):
-        # This __file__ shenanigans will break if someone ever tries to freeze this module, oh well.
-        # Either way, we auto-generate some assembly to handle incoming calls from the main app, proxying them to our __patch methods
-        proxy_asm = open(os.path.join(os.path.dirname(__file__), "mods_proxy.template.s"), "r").read()
+    def _generate_proxy_asm(self, proxied_syscalls_map):
+        # We unconditionally redirect all the app's syscalls to ourselves - but we only need to intercept a subset
+        # So, we auto-generate some assembly to handle these incoming calls, intercepting some (proxied_syscalls_map)
+        # ...while letting the rest pass through to the system unperturbed
         proxy_switch_body = []
         proxy_fcns_body = []
-        # Rather than LDR a fresh index in every instance, we try to use add with an immediate value if possible in the switch body
-        last_idx = min(syscalls_map.values())
+        # The matching is based on syscall index
+        # Rather than LDR a fresh index for every check, we try to use ADD with an immediate value (where possible)
+        last_idx = min(proxied_syscalls_map.values())
         written_base = False
-        for method_name, method_idx in sorted(syscalls_map.items(), key=lambda tup: tup[1]):
+        for method_name, method_idx in sorted(proxied_syscalls_map.items(), key=lambda tup: tup[1]):
             # First, we generate the switch that will branch to our proxy function
             if method_idx - last_idx > 255:
                 written_base = False
@@ -207,20 +212,23 @@ class BinaryPatcher:
                 proxy_switch_body.append("    add r2, r2, #%s" % hex(method_idx - last_idx))
             last_idx = method_idx
             proxy_switch_body.append("    cmp r2, r1\n    beq %s @ syscall index %d" % (method_name + "__proxy", method_idx))
-            # Then, the proxy function itself
+            # Then, the proxy routine itself - which simply branches to the mod's corresponding __patch C function
             proxy_fcns_body.append(".type %s function\n%s:\n    pop {r0, r1, r2, r3}\n    b %s" % (method_name + "__proxy", method_name + "__proxy", method_name + "__patch"))
 
+        # These get dropped into a template
+        proxy_asm = open(os.path.join(os.path.dirname(__file__), "mods_proxy.template.s"), "r").read()
         proxy_asm = check_replace(proxy_asm, "@PROXY_SWITCH_BODY@", "\n".join(proxy_switch_body))
         proxy_asm = check_replace(proxy_asm, "@PROXY_FCNS_BODY@", "\n".join(proxy_fcns_body))
         return proxy_asm
 
     def _offset_main_relocation_table(self, table_location, offset):
+        # As part of the patch, we shift the app's code within the executable to make room for the mod's
+        # So, we need to rewrite the app's relocation table to reflect this offset
         main_reloc_table_size = self._read_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L")[0]
         logger.info("Rewriting %d relocation entries from main binary by offset %x", main_reloc_table_size, offset)
         for entry_idx in range(main_reloc_table_size):
             target_addr = self._read_value_at_offset(table_location + entry_idx * 4, "<L")[0]
             target_value = self._read_value_at_offset(target_addr, "<L")[0]
-            logger.debug("Main binary relocation table entry %d points to %x of value %x", entry_idx, target_addr, target_value)
             target_value += offset
             self._write_value_at_offset(target_addr, "<L", target_value)
             self._write_value_at_offset(table_location + entry_idx * 4, "<L", target_addr + offset)
@@ -349,14 +357,13 @@ class BinaryPatcher:
         mod_load_size = mod_true_load_size + mod_pre_pad + mod_post_pad # With the padding, which we actually insert at a later point
         mod_virtual_size = get_virtual_size(mods_final_intermediate_path) + mod_pre_pad + mod_post_pad
         logger.info("Patch binary:\n\tLoad size\t%x\n\tVirt size\t%x\n\tPrec Pad\t%x\n\tPost pad\t%x", mod_load_size, mod_virtual_size, mod_pre_pad, mod_post_pad)
-
-        # Recompile & load result
         self._compile_mod_bin(mod_link_sources, mods_final_intermediate_path, mods_final_path, app_addr=STRUCT_SIZE_BYTES + mod_pre_pad, bss_addr=virtual_size + mod_load_size, cflags=cflags)
+        # Load it in again, and check that the size didn't change on us
         mod_binary = open(mods_final_path, "rb").read()
         assert len(mod_binary) == mod_true_load_size, "Mod binary size changed after relocating BSS/APP sections"
         mod_binary = b'\0' * mod_pre_pad + mod_binary + b'\0' * mod_post_pad
 
-        # Update their relocation table's entries and targets by the amount we're about to insert after the header
+        # Update their relocation table's entries and targets by the amount we're about to insert between the header and the main app
         self._offset_main_relocation_table(table_location=load_size, offset=mod_load_size)
 
         # Now that it's updated, grab the code and the relocation table separately as we're soon to overwrite both
@@ -364,16 +371,14 @@ class BinaryPatcher:
         main_binary = self._bin_file.read(load_size - STRUCT_SIZE_BYTES)
         main_reloc_table = self._bin_file.read()
 
-        # Find jump_to_pbl_function in the main app
+        # Find jump_to_pbl_function in the main app - this is what we modify to redirect the app's syscalls
         jump_to_pbl_function_signature = unhexify("03 A3 18 68 08 44 02 68 94 46 0F BC 60 47 00 BF A8 A8 A8 A8")
         jump_to_pbl_function_addr = main_binary.index(jump_to_pbl_function_signature)
-        assert jump_to_pbl_function_addr
-        # Replace with something that still grabs reads the offset table addr, but immediately hands off the the address of the method we specify (jump_to_pbl_function__proxy)
+        # Replace it with something that still reads the offset table addr (we want that), but immediately branches to the the address we specify (our jump_to_pbl_function__proxy)
         mod_binary_nm_output = self._get_nm_output(mods_final_intermediate_path)
         mod_syscall_proxy_addr = get_symbol_addr(mod_binary_nm_output, "jump_to_pbl_function__proxy")
         mod_syscall_proxy_jmp_addr = mod_syscall_proxy_addr + 1 # +1 to indicate THUMB 16-bit instruction
         replacement_fcn = unhexify("03 A3 18 68 00 4A 10 47") + struct.pack("<L", mod_syscall_proxy_jmp_addr) + unhexify("00 BF 00 BF A8 A8 A8 A8")
-        assert len(replacement_fcn) == len(jump_to_pbl_function_signature)
         main_binary = check_replace(main_binary, jump_to_pbl_function_signature, replacement_fcn)
         logger.info("Patching main binary jump routine at %x to use proxy at %x", jump_to_pbl_function_addr, mod_syscall_proxy_addr)
 
@@ -390,6 +395,7 @@ class BinaryPatcher:
             logger.info("Writing patch binary's jump indirection value at %x to %x", mod_jump_table_ptr_addr, relocated_main_jump_table)
             mod_binary = check_replace(mod_binary, unhexify("a8a8a8a8"), struct.pack("<L", relocated_main_jump_table))
 
+
         # Now we can rewrite the entire binary from scratch (ish)
         self._bin_file.seek(STRUCT_SIZE_BYTES)
         # First, insert the mod binary
@@ -403,12 +409,12 @@ class BinaryPatcher:
         for entry in mod_reloc_entries:
             self._bin_file.write(struct.pack('<L',entry))
 
-        # And finally, some predefined entries for our proxy infrastructure
-        # (we're adding STRUCT_SIZE_BYTES by hand since we don't compile the header struct into our binary the way the main app does)
+        # And finally, some predefined relocation entries for our proxy infrastructure
+        # (we're adding STRUCT_SIZE_BYTES by hand since our mod binary doesn't include the header struct, while the final binary does)
         infr_reloc_entries = []
         infr_reloc_entries.append(STRUCT_SIZE_BYTES + mod_load_size + jump_to_pbl_function_addr + 8) # For their jump to our proxy
         if mod_jump_table_ptr_addr:
-            infr_reloc_entries.append(STRUCT_SIZE_BYTES + mod_jump_table_ptr_addr) # For our jump table ptr thing
+            infr_reloc_entries.append(STRUCT_SIZE_BYTES + mod_jump_table_ptr_addr) # For our jump table indirection ptr thing
         logger.debug("Appending %d infrastructure relocation entries" % len(infr_reloc_entries))
         for entry in mod_reloc_entries:
             self._bin_file.write(struct.pack('<L',entry))
@@ -429,6 +435,7 @@ class BinaryPatcher:
         main_reloc_table_size = self._read_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L")[0]
         final_crc = crc32(mod_binary + main_binary)
         logger.debug("Final CRC: %d" % final_crc)
+
         self._write_value_at_offset(CRC_ADDR, "<L", final_crc)
         self._write_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L", main_reloc_table_size + len(mod_reloc_entries))
         self._write_value_at_offset(OFFSET_ADDR, "<L", final_entrypoint)
