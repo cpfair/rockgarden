@@ -21,9 +21,9 @@ class Platform:
 
     def patch(self, scratch_dir):
         def patch_pebble_header(src, dest):
-            header = open(src, "r").read()
+            header = open(src, "r", encoding="utf-8").read()
             header = check_replace(header, '#include "src/resource_ids.auto.h"', '')
-            open(dest, "w").write(header)
+            open(dest, "w", encoding="utf-8").write(header)
 
         def patch_pebble_lib(src, dest):
             # We take advantage of a fortuitous nop at the end of this method to insert another LDR command
