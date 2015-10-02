@@ -416,7 +416,7 @@ class BinaryPatcher:
         if mod_jump_table_ptr_addr:
             infr_reloc_entries.append(STRUCT_SIZE_BYTES + mod_jump_table_ptr_addr) # For our jump table indirection ptr thing
         logger.debug("Appending %d infrastructure relocation entries" % len(infr_reloc_entries))
-        for entry in mod_reloc_entries:
+        for entry in infr_reloc_entries:
             self._bin_file.write(struct.pack('<L',entry))
 
         # Make sure we're not breaking the rules
@@ -437,7 +437,7 @@ class BinaryPatcher:
         logger.debug("Final CRC: %d" % final_crc)
 
         self._write_value_at_offset(CRC_ADDR, "<L", final_crc)
-        self._write_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L", main_reloc_table_size + len(mod_reloc_entries))
+        self._write_value_at_offset(NUM_RELOC_ENTRIES_ADDR, "<L", main_reloc_table_size + len(mod_reloc_entries) + len(infr_reloc_entries))
         self._write_value_at_offset(OFFSET_ADDR, "<L", final_entrypoint)
         self._write_value_at_offset(VIRTUAL_SIZE_ADDR, "<H", final_virtual_size)
         self._write_value_at_offset(LOAD_SIZE_ADDR, "<H", final_load_size)
