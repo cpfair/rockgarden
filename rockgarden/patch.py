@@ -70,16 +70,16 @@ class Patcher:
                     copy_to_basalt("pebble-app.bin")
 
                 logger.info("Patching Aplite binary")
-                aplite_bin_patcher = BinaryPatcher(os.path.join(pbw_tmp_dir, "pebble-app.bin"), AplitePlatform, scratch_dir=self._scratch_dir)
-                aplite_bin_patcher.patch(c_sources, new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
+                with BinaryPatcher(os.path.join(pbw_tmp_dir, "pebble-app.bin"), AplitePlatform, scratch_dir=self._scratch_dir) as aplite_bin_patcher:
+                    aplite_bin_patcher.patch(c_sources, new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
                 # Update CRC of binary
                 self._update_manifest(pbw_tmp_dir)
 
             if os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
                 logger.info("Patching Basalt binary")
                 # Do the same operations for basalt
-                basalt_bin_patcher = BinaryPatcher(os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), BasaltPlatform, scratch_dir=self._scratch_dir)
-                basalt_bin_patcher.patch(c_sources, new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
+                with BinaryPatcher(os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), BasaltPlatform, scratch_dir=self._scratch_dir) as basalt_bin_patcher:
+                    basalt_bin_patcher.patch(c_sources, new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
                 # There are two manifests, one for each platform
                 self._update_manifest(os.path.join(pbw_tmp_dir, "basalt"))
 

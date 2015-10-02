@@ -58,6 +58,12 @@ class BinaryPatcher:
         self._platform = platform
         self._scratch_dir = scratch_dir
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._bin_file.close()
+
     def _write_value_at_offset(self, offset, format_str, value):
         self._bin_file.seek(offset)
         self._bin_file.write(struct.pack(format_str, value))
