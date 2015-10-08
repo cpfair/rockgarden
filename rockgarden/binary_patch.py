@@ -346,6 +346,9 @@ class BinaryPatcher:
         proxy_asm_path = os.path.join(self._scratch_dir, "mods_proxy.s")
         open(proxy_asm_path, "w").write(self._generate_proxy_asm(applicable_proxied_syscalls))
 
+        # It's quite difficult to tell if a given symbol was discarded by the linker, so we add some additional defines to the user code so it can know if the app uses a given SDK call
+        cflags = (cflags if cflags else []) + ["-D%s_CALLED" % method_name.upper() for method_name in applicable_proxied_syscalls.keys()]
+
         # Compile the final binary once, since we need to know its dimensions to set the BSS section correctly the second time around
         mod_link_sources = [mod_user_object_path, proxy_asm_path]
         mods_final_intermediate_path = os.path.join(self._scratch_dir, "mods_final.o")
