@@ -16,19 +16,23 @@ class Patcher:
         if not os.path.exists(self._scratch_dir):
             os.mkdir(self._scratch_dir)
 
-    def _update_manifest(self, app_dir):
+    def _update_manifest(self, platform_dir):
         # Ripped from the SDK
         def stm32crc(path):
             with open(path,'r+b')as f:
                 binfile=f.read()
                 return crc32(binfile)&0xFFFFFFFF
 
-        manifest_obj = json.loads(open(os.path.join(app_dir, "manifest.json"), "r+").read())
+        manifest_obj = json.loads(open(os.path.join(platform_dir, "manifest.json"), "r+").read())
 
-        bin_crc = stm32crc(os.path.join(app_dir, "pebble-app.bin"))
-        manifest_obj["application"]["crc"] = bin_crc
-        manifest_obj["application"]["size"] = os.stat(os.path.join(app_dir, "pebble-app.bin")).st_size
-        open(os.path.join(app_dir, "manifest.json"), "w").write(json.dumps(manifest_obj))
+        assets = (("application", "pebble-app.bin"), ("worker", "pebble-worker.bin"))
+        for manifest_key, filename in assets:
+            asset_path = os.path.join(platform_dir, filename)
+            if os.path.exists(asset_path):
+                bin_crc = stm32crc(asset_path)
+                manifest_obj[manifest_key]["crc"] = bin_crc
+                manifest_obj[manifest_key]["size"] = os.stat(asset_path).st_size
+        open(os.path.join(platform_dir, "manifest.json"), "w").write(json.dumps(manifest_obj))
 
     def _update_appinfo(self, app_dir, new_uuid=None, new_app_type=None):
         appinfo_obj = json.loads(open(os.path.join(app_dir, "appinfo.json"), "r+").read())
@@ -68,20 +72,21 @@ class Patcher:
                     copy_to_basalt("app_resources.pbpack")
                     copy_to_basalt("manifest.json")
                     copy_to_basalt("pebble-app.bin")
+                    copy_to_basalt("pebble-worker.bin")
 
-                logger.info("Patching Aplite binary")
-                with BinaryPatcher(os.path.join(pbw_tmp_dir, "pebble-app.bin"), AplitePlatform, scratch_dir=self._scratch_dir) as aplite_bin_patcher:
-                    aplite_bin_patcher.patch(c_sources, new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
+            platforms = (AplitePlatform, BasaltPlatform)
+            for platform in platforms:
+                platform_dir = os.path.join(pbw_tmp_dir, platform.name) if platform != AplitePlatform else pbw_tmp_dir
+                if os.path.exists(os.path.join(platform_dir, "pebble-app.bin")):
+                    logger.info("Patching %s binary" % platform.name.title())
+                    with BinaryPatcher(os.path.join(platform_dir, "pebble-app.bin"), platform, scratch_dir=self._scratch_dir) as app_bin_patcher:
+                        app_bin_patcher.patch(c_sources, new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
+                if os.path.exists(os.path.join(platform_dir, "pebble-worker.bin")):
+                    logger.info("Patching %s worker" % platform.name.title())
+                    with BinaryPatcher(os.path.join(platform_dir, "pebble-worker.bin"), platform, scratch_dir=self._scratch_dir) as worker_bin_patcher:
+                        worker_bin_patcher.patch(c_sources, new_uuid, cflags=cflags)
                 # Update CRC of binary
-                self._update_manifest(pbw_tmp_dir)
-
-            if os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
-                logger.info("Patching Basalt binary")
-                # Do the same operations for basalt
-                with BinaryPatcher(os.path.join(pbw_tmp_dir, "basalt", "pebble-app.bin"), BasaltPlatform, scratch_dir=self._scratch_dir) as basalt_bin_patcher:
-                    basalt_bin_patcher.patch(c_sources, new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
-                # There are two manifests, one for each platform
-                self._update_manifest(os.path.join(pbw_tmp_dir, "basalt"))
+                self._update_manifest(platform_dir)
 
         if js_sources:
             logger.info("Prepending JS sources")
