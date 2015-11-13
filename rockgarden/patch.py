@@ -23,7 +23,10 @@ class Patcher:
                 binfile=f.read()
                 return crc32(binfile)&0xFFFFFFFF
 
-        manifest_obj = json.loads(open(os.path.join(platform_dir, "manifest.json"), "r+").read())
+        manifest_path = os.path.join(platform_dir, "manifest.json")
+        if not os.path.exists(manifest_path):
+            return
+        manifest_obj = json.loads(open(manifest_path, "r+").read())
 
         assets = (("application", "pebble-app.bin"), ("worker", "pebble-worker.bin"))
         for manifest_key, filename in assets:
