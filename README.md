@@ -27,11 +27,11 @@ Usage
                         js_sources=["my-patches.js"],
                         new_uuid=uuid.uuid4(),
                         new_app_type="watchface",
-                        ensure_platforms=["aplite", "basalt"])
+                        ensure_platforms=["aplite", "basalt", "chalk"])
 
 Some work is performed when you first instantiate the `Patcher`, so hold on to it if you're patching multiple apps. `c_sources`, `js_sources`, `cflags`, `new_uuid`, `new_app_type`, and `ensure_platforms` are all optional.
 
-Including "basalt" in `ensure_platforms` will "upgrade" Aplite-only apps by copying their Aplite binary and patching it as if it were Basalt. `ensure_platform` currently has no effect on Basalt-only apps, or apps with both executables.
+Including a platform in `ensure_platforms` will "upgrade" apps by copying an existing binary into that platform's place, as if it were built specifically for that platform. The copied binary is then patched as usual. Sadly, this option is not magical: it will not translate between rectangular and circular framebuffer formats, polyfill missing APIs, etc. If multiple binaries are available to copy, the binary from the closest platform will be used (e.g. ensuring Chalk on a PBW with Aplite and Basalt binaries will see the Basalt binary copied into Chalk's place). During patch compilation, the binary's provenance is exposed via the `RG_ORIGINAL_PLATFORM_<PLATFORM>` (e.g. `RG_ORIGINAL_PLATFORM_APLITE`) define.
 
 Creating patches (C)
 --------------------

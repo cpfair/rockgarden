@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class Platform:
-    def __init__(self, name, arch, includes, lib, max_binary_size, max_memory_size, cflags=[]):
+    def __init__(self, name, arch, includes, lib, max_binary_size, max_memory_size, cflags=[], fallback_platforms=[], directory=""):
         self.name = name
         self.arch = arch
         self.includes = includes
@@ -18,6 +18,8 @@ class Platform:
         self.cflags = cflags
         self._syscall_table = None # Lazy-loaded
         self._patched = False
+        self.fallback_platforms = fallback_platforms
+        self.directory = directory
 
     def patch(self, scratch_dir):
         def patch_pebble_header(src, dest):
@@ -68,10 +70,23 @@ AplitePlatform = Platform(  "aplite", "cortex-m3",
                             lib=os.path.join(SDK.path(), "Pebble", "aplite", "lib", "libpebble.a"),
                             max_memory_size=0x6000,
                             max_binary_size=0x10000,
-                            cflags=["-DPBL_PLATFORM_APLITE", "-DPBL_BW"])
+                            cflags=["-DPBL_PLATFORM_APLITE", "-DPBL_BW"],
+                            fallback_platforms=["basalt", "chalk"])
+
 BasaltPlatform = Platform(  "basalt", "cortex-m4",
                             includes=[os.path.join(SDK.path(), "Pebble", "basalt", "include")],
                             lib=os.path.join(SDK.path(), "Pebble", "basalt", "lib", "libpebble.a"),
                             max_memory_size=0x10000,
                             max_binary_size=0x10000,
-                            cflags=["-DPBL_PLATFORM_BASALT", "-DPBL_COLOR", "-D_TIME_H_"])
+                            cflags=["-DPBL_PLATFORM_BASALT", "-DPBL_COLOR", "-D_TIME_H_"],
+                            fallback_platforms=["aplite", "chalk"], # Since chalk apps generally won't fit in the screen...
+                            directory="basalt")
+
+ChalkPlatform = Platform(  "chalk", "cortex-m4",
+                            includes=[os.path.join(SDK.path(), "Pebble", "chalk", "include")],
+                            lib=os.path.join(SDK.path(), "Pebble", "chalk", "lib", "libpebble.a"),
+                            max_memory_size=0x10000,
+                            max_binary_size=0x10000,
+                            cflags=["-DPBL_PLATFORM_CHALK", "-DPBL_COLOR", "-D_TIME_H_"],
+                            fallback_platforms=["basalt", "aplite"],
+                            directory="chalk")

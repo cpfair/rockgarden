@@ -1,5 +1,5 @@
 from rockgarden.binary_patch import BinaryPatcher
-from rockgarden.platforms import AplitePlatform, BasaltPlatform
+from rockgarden.platforms import AplitePlatform, BasaltPlatform, ChalkPlatform
 from .stm32_crc import crc32
 import os
 import shutil
@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 
 class Patcher:
+    _platforms = (AplitePlatform, BasaltPlatform, ChalkPlatform)
+
     def __init__(self, scratch_dir=".pebble-patch-tmp"):
         # Set up the scratch directory
         self._scratch_dir = scratch_dir
@@ -46,6 +48,12 @@ class Patcher:
         if new_app_type:
             appinfo_obj.setdefault("watchapp", {})["watchface"] = new_app_type == "watchface"
 
+        # Inspect which platforms we support automatically, and paste them in
+        appinfo_obj["targetPlatforms"] = []
+        for platform in Patcher._platforms:
+            if os.path.exists(os.path.join(app_dir, platform.directory, "pebble-app.bin")):
+                appinfo_obj["targetPlatforms"].append(platform.name)
+
         open(os.path.join(app_dir, "appinfo.json"), "w").write(json.dumps(appinfo_obj))
 
     def patch_pbw(self, pbw_path, pbw_out_path, c_sources=None, js_sources=None, cflags=None, new_uuid=None, new_app_type=None, ensure_platforms=()):
@@ -59,37 +67,43 @@ class Patcher:
         with zipfile.ZipFile(pbw_path, "r") as z:
             z.extractall(pbw_tmp_dir)
 
-        if new_uuid or new_app_type:
-            self._update_appinfo(pbw_tmp_dir, new_uuid, new_app_type)
+        platform_map = {x.name: x for x in Patcher._platforms}
+        # Since we can shuffle around binaries, track where they came from
+        binary_provenance = {x.name: x.name for x in Patcher._platforms}
+
+        # Apply ensure_platform fallbacks
+        # These are all the files that can ever be in a platform directory
+        # If an ensured_platform is missing from the PBW, and one of its fallback_platforms is present, we'll copy these from the latter to the former
+        fallback_copy_files = ("app_resources.pbpack", "manifest.json", "pebble-app.bin", "pebble-worker.bin", "layouts.json")
+        for ensure_platform in (platform_map.get(platform_name) for platform_name in ensure_platforms):
+            if not os.path.exists(os.path.join(pbw_tmp_dir, ensure_platform.directory, "pebble-app.bin")):
+                # The PBW is missing this platform
+                # Try to copy in one of the fallbacks
+                for fallback_platform in (platform_map.get(platform_name) for platform_name in ensure_platform.fallback_platforms):
+                    # We check for the primary binary's existence, since other files are optional-ish
+                    if os.path.exists(os.path.join(pbw_tmp_dir, fallback_platform.directory, "pebble-app.bin")):
+                        os.mkdir(os.path.join(pbw_tmp_dir, ensure_platform.directory))
+                        for copy_fn in fallback_copy_files:
+                            if os.path.exists(os.path.join(pbw_tmp_dir, fallback_platform.directory, copy_fn)):
+                                shutil.copy2(os.path.join(pbw_tmp_dir, fallback_platform.directory, copy_fn), os.path.join(pbw_tmp_dir, ensure_platform.directory, copy_fn))
+                        # Update provenance so the defines are correct
+                        binary_provenance[ensure_platform.name] = fallback_platform.name
+                        break
 
         if c_sources:
-            if os.path.exists(os.path.join(pbw_tmp_dir, "pebble-app.bin")):
-                # If they want a basalt binary, give them a basalt binary (that's really an Aplite binary)
-                # We will probably end up using 3.x features in apps with a pruported SDK version of 1(??)/2 - but I don't think the firmware cares
-                # (syscall changes are achieved by creating entirely new syscall indices, not checking the ver #)
-                if "basalt" in ensure_platforms and not os.path.exists(os.path.join(pbw_tmp_dir, "basalt")):
-                    def copy_to_basalt(fn):
-                        if os.path.exists(os.path.join(pbw_tmp_dir, fn)):
-                            shutil.copy2(os.path.join(pbw_tmp_dir, fn), os.path.join(pbw_tmp_dir, "basalt", fn))
-                    os.mkdir(os.path.join(pbw_tmp_dir, "basalt"))
-                    copy_to_basalt("app_resources.pbpack")
-                    copy_to_basalt("manifest.json")
-                    copy_to_basalt("pebble-app.bin")
-                    copy_to_basalt("pebble-worker.bin")
-
-            platforms = (AplitePlatform, BasaltPlatform)
-            for platform in platforms:
-                platform_dir = os.path.join(pbw_tmp_dir, platform.name) if platform != AplitePlatform else pbw_tmp_dir
-                if os.path.exists(os.path.join(platform_dir, "pebble-app.bin")):
+            # Actually patch the binaries
+            for platform in Patcher._platforms:
+                platform_cflags = (cflags if cflags else []) + ["-DRG_ORIGINAL_PLATFORM_%s" % binary_provenance[platform.name].upper()]
+                if os.path.exists(os.path.join(pbw_tmp_dir, platform.directory, "pebble-app.bin")):
                     logger.info("Patching %s binary" % platform.name.title())
-                    with BinaryPatcher(os.path.join(platform_dir, "pebble-app.bin"), platform, scratch_dir=self._scratch_dir) as app_bin_patcher:
-                        app_bin_patcher.patch(c_sources, new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=cflags)
-                if os.path.exists(os.path.join(platform_dir, "pebble-worker.bin")):
+                    with BinaryPatcher(os.path.join(pbw_tmp_dir, platform.directory, "pebble-app.bin"), platform, scratch_dir=self._scratch_dir) as app_bin_patcher:
+                        app_bin_patcher.patch(c_sources, new_uuid, new_app_type, enable_js=True if js_sources else None, cflags=platform_cflags)
+                if os.path.exists(os.path.join(pbw_tmp_dir, platform.directory, "pebble-worker.bin")):
                     logger.info("Patching %s worker" % platform.name.title())
-                    with BinaryPatcher(os.path.join(platform_dir, "pebble-worker.bin"), platform, scratch_dir=self._scratch_dir) as worker_bin_patcher:
-                        worker_bin_patcher.patch(c_sources, new_uuid, cflags=cflags)
+                    with BinaryPatcher(os.path.join(pbw_tmp_dir, platform.directory, "pebble-worker.bin"), platform, scratch_dir=self._scratch_dir) as worker_bin_patcher:
+                        worker_bin_patcher.patch(c_sources, new_uuid, cflags=platform_cflags)
                 # Update CRC of binary
-                self._update_manifest(platform_dir)
+                self._update_manifest(platform.directory)
 
         if js_sources:
             logger.info("Prepending JS sources")
@@ -102,6 +116,8 @@ class Patcher:
                     js_hnd.write(open(source, "r").read() + "\n")
                 if existing_js:
                     js_hnd.write(existing_js)
+
+        self._update_appinfo(pbw_tmp_dir, new_uuid, new_app_type)
 
         with zipfile.ZipFile(pbw_out_path, "w", zipfile.ZIP_DEFLATED) as z:
             for root, dirs, files in os.walk(pbw_tmp_dir):
