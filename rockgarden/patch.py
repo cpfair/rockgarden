@@ -103,7 +103,7 @@ class Patcher:
                     with BinaryPatcher(os.path.join(pbw_tmp_dir, platform.directory, "pebble-worker.bin"), platform, scratch_dir=self._scratch_dir) as worker_bin_patcher:
                         worker_bin_patcher.patch(c_sources, new_uuid, cflags=platform_cflags)
                 # Update CRC of binary
-                self._update_manifest(platform.directory)
+                self._update_manifest(os.path.join(pbw_tmp_dir, platform.directory))
 
         if js_sources:
             logger.info("Prepending JS sources")
