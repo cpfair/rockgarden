@@ -87,7 +87,7 @@ class Patcher:
                             if os.path.exists(os.path.join(pbw_tmp_dir, fallback_platform.directory, copy_fn)):
                                 shutil.copy2(os.path.join(pbw_tmp_dir, fallback_platform.directory, copy_fn), os.path.join(pbw_tmp_dir, ensure_platform.directory, copy_fn))
                         # Update provenance so the defines are correct
-                        binary_provenance[ensure_platform.name] = fallback_platform.name
+                        binary_provenance[ensure_platform.name] = binary_provenance[fallback_platform.name]
                         break
 
         if c_sources:
