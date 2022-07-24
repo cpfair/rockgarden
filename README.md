@@ -7,6 +7,7 @@ Requirement
 -----------
 
 * Pebble SDK with Pebble Tool 3.x or 4.x (with the `pebble` command in your PATH, or environment variable `PBL_TOOL_PATH` set to the path of the pebble tool binary)
+    * Tested with `Pebble Tool v4.6-rc1 (active SDK: v4.3)`
 
 Install
 -------
@@ -27,7 +28,7 @@ Usage
                         js_sources=["my-patches.js"],
                         new_uuid=uuid.uuid4(),
                         new_app_type="watchface",
-                        ensure_platforms=["aplite", "basalt", "chalk"])
+                        ensure_platforms=["aplite", "basalt", "chalk", "diorite"])
 
 Some work is performed when you first instantiate the `Patcher`, so hold on to it if you're patching multiple apps. `c_sources`, `js_sources`, `cflags`, `new_uuid`, `new_app_type`, and `ensure_platforms` are all optional.
 

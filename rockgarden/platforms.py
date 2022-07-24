@@ -84,3 +84,11 @@ ChalkPlatform = Platform(  "chalk", "cortex-m4",
                             cflags=["-DPBL_PLATFORM_CHALK", "-DPBL_COLOR", "-D_TIME_H_"],
                             fallback_platforms=["basalt", "aplite"],
                             directory="chalk")
+
+DioritePlatform = Platform(  "diorite", "cortex-m4",
+                            max_memory_size=0x10000,
+                            max_binary_size=0x10000,
+                            cflags=["-DPBL_PLATFORM_DIORITE", "-DPBL_BW", "-D_TIME_H_"],
+                            fallback_platforms=["basalt", "aplite"], # Since chalk apps generally won't fit in the screen...
+                            directory="diorite")
+
