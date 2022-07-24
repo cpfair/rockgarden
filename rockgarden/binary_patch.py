@@ -91,6 +91,7 @@ class BinaryPatcher:
                     "-fdata-sections",
                     "-std=c99",
                     "-Os",
+                    "-I%s" % os.path.join(os.path.dirname(__file__), 'c_src'),
                     "-nostdlib"] + ["-I%s" % path for path in self._platform.includes] + cflags
         if self._platform.cflags:
             cflags = cflags + self._platform.cflags

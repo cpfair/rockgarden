@@ -7,6 +7,7 @@ Requirement
 -----------
 
 * Pebble SDK with Pebble Tool 3.x or 4.x (with the `pebble` command in your PATH, or environment variable `PBL_TOOL_PATH` set to the path of the pebble tool binary)
+    * Tested with `Pebble Tool v4.6-rc1 (active SDK: v4.3)`
 
 Install
 -------
