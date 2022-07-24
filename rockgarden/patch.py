@@ -1,5 +1,5 @@
 from rockgarden.binary_patch import BinaryPatcher
-from rockgarden.platforms import AplitePlatform, BasaltPlatform, ChalkPlatform
+from rockgarden.platforms import AplitePlatform, BasaltPlatform, ChalkPlatform, DioritePlatform
 from .stm32_crc import crc32
 import os
 import shutil
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class Patcher:
-    _platforms = (AplitePlatform, BasaltPlatform, ChalkPlatform)
+    _platforms = (AplitePlatform, BasaltPlatform, ChalkPlatform, DioritePlatform)
 
     def __init__(self, scratch_dir=".pebble-patch-tmp"):
         # Set up the scratch directory

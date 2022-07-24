@@ -27,7 +27,7 @@ Usage
                         js_sources=["my-patches.js"],
                         new_uuid=uuid.uuid4(),
                         new_app_type="watchface",
-                        ensure_platforms=["aplite", "basalt", "chalk"])
+                        ensure_platforms=["aplite", "basalt", "chalk", "diorite"])
 
 Some work is performed when you first instantiate the `Patcher`, so hold on to it if you're patching multiple apps. `c_sources`, `js_sources`, `cflags`, `new_uuid`, `new_app_type`, and `ensure_platforms` are all optional.
 
